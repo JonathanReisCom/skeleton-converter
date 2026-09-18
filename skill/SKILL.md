@@ -3,11 +3,11 @@ name: skeleton-converter
 description: Convert 2D skeletal animation rigs between engine formats via a canonical model — currently Godot Skeleton2D scenes (.tscn) and Spine JSON, with more formats planned. Use when porting a rig between supported engines, importing a Spine export into Godot or vice versa, verifying a converted skeleton reproduces the original pose, or debugging silent coordinate/skinning bugs in converted animations. Triggers on "convert godot to spine", "convert spine to godot", "port skeleton between engines", "spine json from godot", "godot scene from spine", "validate skeletal animation round-trip".
 ---
 
-# Godot ↔ Spine Converter
+# Skeleton Converter
 
-A conversion hub for 2D skeletal animation rigs: one canonical in-memory model,
-one importer and one exporter per format. Currently Godot 4 `Skeleton2D` scenes
-(.tscn) ⇄ Spine JSON; DragonBones and LoongBones are planned adapters. Not
+A conversion hub for 2D skeletal animation rigs: one canonical in-memory model,  
+one importer and one exporter per format. Currently Godot 4 `Skeleton2D` scenes  
+(.tscn) ⇄ Spine JSON; DragonBones and LoongBones are planned adapters. Not  
 affiliated with Esoteric Software.
 
 ## Quick start
