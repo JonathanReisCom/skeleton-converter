@@ -80,3 +80,25 @@ rig that *looks* plausible but has silent coordinate bugs. The only defense is
 numeric comparison against the real engine at sampled animation times. Reading
 the code, checking field names, or eyeballing the output in an editor are all
 insufficient.
+
+## Docs maintenance
+
+Docs are not optional. When a change contradicts, invalidates, or extends what
+the docs say, update them in the same commit:
+
+- **`README.md` coordinate contract** — update when a coordinate rule, a
+  mirroring convention, an interpolation behavior, or an attachment mapping
+  changes. This is the most-read section; stale rules here produce wrong rigs.
+- **`ROADMAP.md`** — check a planned item off when implemented; add new
+  discoveries (bugs found, edge cases, format quirks) that represent future
+  work.
+- **`AGENTS.md`** — update when an architecture rule, a non-negotiable, or a
+  "how to add a format" step changes.
+
+If you find yourself writing a comment in code that explains a convention or
+traps, check whether the coordinate contract already documents it. If it does
+not, add it there instead — the code comment serves the current reader; the
+contract serves every future reader and converter.
+
+A change that contradicts the docs without updating them is an incomplete
+change. If you are unsure whether a change warrants a doc update, it does.

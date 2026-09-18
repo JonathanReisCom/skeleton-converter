@@ -152,6 +152,10 @@ sides and compare bone world positions numerically:
 The threshold for PASS is < 0.01 units on every bone. Deviations smaller than
 that are rounding; anything larger is a real bug.
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for planned features and next steps.
+
 ## License
 
 MIT for this tool's code. See [THIRD-PARTY.md](THIRD-PARTY.md) for notes on
