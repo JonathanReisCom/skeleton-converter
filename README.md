@@ -1,20 +1,24 @@
 # skeletonconverter
 
-Convert 2D skeletal animation rigs between engines. Reads one format, writes
-another, and proves the conversion numerically instead of trusting it by eye.
+A conversion hub for 2D skeletal animation rigs. One canonical in-memory model,
+one importer and one exporter per format — currently Godot Skeleton2D scenes
+(.tscn) and Spine JSON, with more formats planned. Every conversion is proven
+numerically instead of trusted by eye.
 
 ## Status
 
-Working: Godot Skeleton2D scenes (.tscn) → Spine JSON. More formats planned via
-a canonical in-memory model — see [Architecture](#architecture).
+Working today: Godot Skeleton2D scenes (.tscn) ⇄ Spine JSON, both directions,
+numeric round-trip validated. Next: DragonBones and LoongBones adapters via the
+same canonical model — see [ROADMAP.md](ROADMAP.md).
 
 ## Why
 
-Spine exports a neutral JSON that many runtimes consume. Godot rigs are locked
-in `.tscn`. The bridge lets a rig authored in either tool reach the other —
-and because a silent coordinate mistake produces a rig that *looks* plausible
-but is wrong, the tool validates conversions numerically against the real
-engines instead of trusting inspection.
+Rigs are locked in each tool's format: Godot in `.tscn`, Spine in its JSON,
+DragonBones in its own schema. The hub lets a rig authored in any supported
+tool reach any other — add a format and it talks to all existing ones, not
+just the next one. And because a silent coordinate mistake produces a rig that
+*looks* plausible but is wrong, every conversion is validated numerically
+against the real engines instead of trusting inspection.
 
 ## Quick start
 

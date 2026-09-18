@@ -4,9 +4,9 @@ Conventions for AI agents and humans working on this repository.
 
 ## What this project is
 
-A bidirectional converter for 2D skeletal animation rigs. Reads one format,
-writes another, validates numerically against the real engines. Currently:
-Godot Skeleton2D scenes (.tscn) ↔ Spine JSON.
+A conversion hub for 2D skeletal animation rigs: one canonical in-memory model,
+one importer and one exporter per format. Currently: Godot Skeleton2D scenes
+(.tscn) ⇄ Spine JSON; more formats planned (DragonBones, LoongBones).
 
 ## Language
 
