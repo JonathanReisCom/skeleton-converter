@@ -131,8 +131,8 @@ Hub-and-spoke. A canonical in-memory model, one importer and one exporter per
 format:
 
 ```
-godot_in ──> model ──> spine_out
-spine_in ──> model ──> godot_out
+in_godot ──> model ──> out_spine
+in_spine ──> model ──> out_godot
 ```
 
 Adding a format means writing two adapters, not N² converters. Every adapter is

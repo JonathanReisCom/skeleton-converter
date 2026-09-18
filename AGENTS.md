@@ -39,10 +39,10 @@ format. Adding a format means writing two adapters, not N² converters.
 ```
 src/
 ├── model.py       # canonical model + FK (forward kinematics) + inherit modes
-├── godot_in.py    # .tscn reader → model
-├── godot_out.py   # model → .tscn writer
-├── spine_in.py    # Spine JSON reader → model
-├── spine_out.py   # model → Spine JSON writer
+├── in_godot.py    # .tscn reader → model
+├── in_spine.py    # Spine JSON reader → model
+├── out_godot.py   # model → .tscn writer
+├── out_spine.py   # model → Spine JSON writer
 ├── registry.py    # format detection, convert dispatch
 └── cli.py         # command-line interface
 ```
