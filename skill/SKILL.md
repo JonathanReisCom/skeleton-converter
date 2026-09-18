@@ -13,16 +13,16 @@ affiliated with Esoteric Software.
 ## Quick start
 
 ```bash
-CONV="<cloned repo>/scripts/spine_godot_converter.py"
+cd <cloned repo>   # python -m needs the repo as working directory
 
 # Godot scene -> Spine JSON (+ .atlas)
-python3 "$CONV" convert --to spine path/to/player.tscn -o out.json
+python3 -m src.cli convert --to spine path/to/player.tscn -o out.json
 
 # Spine JSON -> Godot scene
-python3 "$CONV" convert --to godot path/to/hero.json -o out.tscn
+python3 -m src.cli convert --to godot path/to/hero.json -o out.tscn
 
 # Numeric diff between a Godot scene and a Spine JSON
-python3 "$CONV" compare rig.tscn out.json
+python3 -m src.cli compare rig.tscn out.json
 ```
 
 Requires: `python3` (3.10+, zero dependencies), `node`, and the Godot 4 binary  
@@ -39,7 +39,7 @@ The Spine-side validation needs `@esotericsoftware/spine-core` — run
    `--texture` for the image path.
 3. **Validate numerically** — never by eye:
   ```bash
-   bash scripts/validate-roundtrip.sh <godot-project-dir> <scene.tscn> \
+   bash validation/validate-roundtrip.sh <godot-project-dir> <scene.tscn> \
      <spine.json> <animation> <time> [sprite-scale]
   ```
    Prints worst bone deviation and `PASS`/`FAIL` (threshold 0.01 units). A  

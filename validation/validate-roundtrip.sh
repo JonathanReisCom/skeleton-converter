@@ -3,8 +3,8 @@
 #
 # Both sides sample the same animation time and are compared in Godot skeleton
 # space (Y flipped for the Spine side):
-#   - Godot engine: godot-sample-pose.gd prints each Bone2D's world position
-#   - Spine runtime: spine-sample-pose.mjs prints each bone's world matrix
+#   - Godot engine: pose-sample-godot.gd prints each Bone2D's world position
+#   - Spine runtime: pose-sample-spine.mjs prints each bone's world matrix
 # PASS means the converted file reproduces the source engine's pose.
 #
 # Usage:
@@ -22,12 +22,12 @@ ANIMATION="${4:-walk}"
 TIME="${5:-0.3}"
 SCALE="${6:-1.0}"
 
-cp "$HERE/godot-sample-pose.gd" "$PROJECT_DIR/sample_pose.gd"
+cp "$HERE/pose-sample-godot.gd" "$PROJECT_DIR/sample_pose.gd"
 "$GODOT_BIN" --headless --path "$PROJECT_DIR" --script res://sample_pose.gd -- \
   "$SCENE_PATH" "$ANIMATION" "$TIME" "$SCALE" 2>/dev/null \
   | grep '^POSE' > /tmp/godot-pose.txt
 
-NODE_PATH="${SPINE_CORE_NODE_PATH:-$HERE/node_modules}" node "$HERE/spine-sample-pose.mjs" \
+NODE_PATH="${SPINE_CORE_NODE_PATH:-$HERE/node_modules}" node "$HERE/pose-sample-spine.mjs" \
   "$SPINE_JSON" "$ANIMATION" "$TIME" > /tmp/spine-pose.json
 
 python3 - <<'PY'

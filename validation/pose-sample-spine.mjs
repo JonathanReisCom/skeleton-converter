@@ -2,7 +2,7 @@
 // bone's world matrix, so it can be compared against the Godot engine's own
 // numbers for the same animation time.
 //
-//   node spine-sample-pose.mjs <skeleton.json> <animation> <time>
+//   node pose-sample-spine.mjs <skeleton.json> <animation> <time>
 //
 // Requires @esotericsoftware/spine-core (npm i @esotericsoftware/spine-core).
 // A null attachment loader is used: bone transforms and animations parse
@@ -15,7 +15,7 @@ import {
 
 const [, , jsonPath, animation, timeRaw] = process.argv;
 if (!jsonPath || !animation || timeRaw === undefined) {
-  console.error("usage: spine-sample-pose.mjs <skeleton.json> <animation> <time>");
+  console.error("usage: pose-sample-spine.mjs <skeleton.json> <animation> <time>");
   process.exit(2);
 }
 

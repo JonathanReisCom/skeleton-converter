@@ -69,7 +69,7 @@ the converter stdlib-only so the product itself has no license friction.
 3. Add a fixture to `tests/fixtures/` (MIT or CC0 licensed only).
 4. Write a round-trip test: `fixture → model → fixture` with numeric tolerance.
 5. If the format has a live runtime, write a ground-truth sampler (like
-   `godot-sample-pose.gd` or `spine-sample-pose.mjs`) and add it to the
+   `pose-sample-godot.gd` or `pose-sample-spine.mjs`) and add it to the
    cross-engine validation.
 6. Only then add the format to the registry.
 

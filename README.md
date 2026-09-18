@@ -24,11 +24,11 @@ against the real engines instead of trusting inspection.
 
 ```bash
 # Godot scene -> Spine JSON (writes out.json + out.atlas)
-python3 skeletonconverter convert --to spine \
+python3 -m src.cli convert --to spine \
   path/to/player.tscn -o out.json
 
 # Spine JSON -> Godot scene (requires the .atlas beside the input JSON)
-python3 skeletonconverter convert --to godot \
+python3 -m src.cli convert --to godot \
   path/to/hero.json -o out.tscn --texture res://player/gBot.png
 ```
 

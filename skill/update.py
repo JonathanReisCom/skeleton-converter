@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Keep the skeletonconverter skill in sync with its upstream repo.
 
-Self-contained: copy this file + SKILL.md + scripts/ anywhere and the skill
+Self-contained: copy this file + SKILL.md + validation/ anywhere and the skill
 can update itself. Checks the upstream repo HEAD at most once per TTL window
 so loading the skill stays cheap. --force ignores the window; --check reports
 drift without writing.
@@ -30,10 +30,9 @@ TTL_SECONDS = 24 * 60 * 60
 # must re-copy itself so the installed skill can keep updating itself.
 SKILL_FILES = [
     "skill/SKILL.md",
-    "scripts/spine_godot_converter.py",
-    "scripts/spine-sample-pose.mjs",
-    "scripts/godot-sample-pose.gd",
-    "scripts/validate-roundtrip.sh",
+    "validation/pose-sample-spine.mjs",
+    "validation/pose-sample-godot.gd",
+    "validation/validate-roundtrip.sh",
     "update.py",
     "LICENSE",
 ]
