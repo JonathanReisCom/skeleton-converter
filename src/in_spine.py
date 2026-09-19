@@ -146,8 +146,13 @@ def _effective_local(spine: dict, bone_name: str, pose: dict | None) -> tuple:
     return multiply(invert(world[parent_name]), world[bone_name])
 
 
-def read_skeleton(json_path: str, atlas_path: str | None = None) -> Skeleton:
-    """Read Spine JSON + optional atlas into the canonical model (Godot space)."""
+def read_skeleton(json_path: str, atlas_path: str | None = None,
+                  skin: str | None = None) -> Skeleton:
+    """Read Spine JSON + optional atlas into the canonical model (Godot space).
+
+    ``skin`` selects which skin's constraints are baked; the rig's first skin
+    is the default, matching the runtime.
+    """
     spine = read_spine(json_path)
     atlas_regions = read_atlas_regions(atlas_path)
     page_size = read_png_size(
@@ -305,10 +310,18 @@ def read_skeleton(json_path: str, atlas_path: str | None = None) -> Skeleton:
         })
 
     # ---- animations: Spine offsets → Godot absolute values
+    # Constraints are baked first: Godot has no IK/path constraints, so the
+    # bones they drive must carry the solved transforms as ordinary keys or the
+    # rig lands in its setup pose. See src/constraints.py.
+    from . import constraints
     bone_relative = bone_relative_path
     for anim_name, animation in spine["animations"].items():
+        bones = dict(animation.get("bones", {}))
+        baked = constraints.bake_animation(spine, anim_name, skin=skin)
+        for bone_name, channels in baked.items():
+            bones[bone_name] = channels
         tracks = {}
-        for bone_name, props in animation.get("bones", {}).items():
+        for bone_name, props in bones.items():
             setup = next((b for b in spine["bones"] if b["name"] == bone_name), {})
             setup_rot = setup.get("rotation", 0.0)
             setup_pos = (setup.get("x", 0.0), setup.get("y", 0.0))

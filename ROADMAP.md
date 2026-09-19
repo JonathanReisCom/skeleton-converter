@@ -20,6 +20,9 @@
       imports and the rig renders. Images need a one-time `Tree → Images → Path`
       step per project (Editor design, not a converter bug), and the Trial's
       `-i -o -r` CLI opens the GUI without writing a `.spine` file.
+- [x] IK and path constraints baked into animation keys — ported from the
+      official runtime (`src/constraints.py`), validated to <0.005 units
+      against it on the official hero rig across 7 animations
 
 ## Planned
 
@@ -27,9 +30,12 @@
 
 - [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate` are
       read), so rigs that animate scale deviate from the source
-- [ ] Spine constraints (IK, path, physics) are not converted, so the bones
-      they drive (e.g. `chain1..8` under a path constraint, `shin*` under leg
-      IK) deviate by design — see the tolerance rule in `AGENTS.md`
+- [ ] Transform and physics constraints are not baked (IK and path are) — see
+      `unsupported_constraints()`; the bones they drive keep their animated
+      values
+- [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
+      bone along a chain (~0.42 after four), independent of constraints. It
+      predates the constraint work and is the largest remaining error source
 
 ### Godot side
 

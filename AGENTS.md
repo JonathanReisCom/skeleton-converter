@@ -172,6 +172,44 @@ Two traps this catches:
 Pick an animation with real movement (`walk`, `run`) — some animations such as
 `fall` are nearly static by design and prove nothing.
 
+### Rule: port solvers from the runtime, never from its documentation
+
+`src/constraints.py` bakes Spine's IK and path constraints by porting the
+official solver (`spine-core` 4.2 `IkConstraint` / `PathConstraint`). Six bugs
+came from guessing semantics instead of reading the code — each produced a
+plausible rig with a silently wrong pose:
+
+- **Defaults are not what they look like.** `SkeletonJson` reads
+  `constantSpeed` with a default of **true**, `rotateMode` defaults to
+  **chain** (not tangent), `positionMode` to **percent**, `spacingMode` to
+  **length**. An absent key means the accurate branch.
+- **`vertexCount` is not a loop bound.** `readVertices` is called with
+  `vertexCount << 1` and then walks the *whole* `vertices` array; the path's
+  15 vertices were read as 8, skipping every later Bezier segment.
+- **`computeWorldVertices(start=2)` skips the first vertex**, and `start`
+  counts *floats*, not vertices. `curveCount` is derived from the unsliced
+  length, so slicing before counting loses a segment.
+- **A constraint's `target` names a SLOT, not a bone** for path constraints.
+- **`skin: true` means inactive, not "always on".** Both the constraint and
+  the bones it drives are deactivated unless the active skin lists them; the
+  runtime then leaves those bones at `(0, 0)`. Baking them anyway moved the
+  hero's unequipped chains by 228 units.
+- **`updateAppliedTransform` must not be re-run after a path constraint.** It
+  extracts the local transform from world; re-propagating recomputes world from
+  stale parents and undoes the placement.
+
+The check that catches all of these is numeric comparison against the runtime
+at the same pose, per skin:
+
+```bash
+node validation/constraint-reference.mjs <rig>.json <rig>.atlas [anim] [time]
+# SPINE_SKIN=<name> selects the skin; the hero's path constraint only runs
+# under "weapon/morningstar"
+```
+
+`tests/test_constraints.py` pins the solver to runtime-produced numbers, so a
+drift fails CI without needing the Spine rig.
+
 ### Rule: a passing round-trip test does not prove the .tscn loads
 
 Reading a generated `.tscn` back with our own parser only proves the parser and
