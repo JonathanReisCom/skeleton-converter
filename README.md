@@ -1,4 +1,4 @@
-# skeletonconverter
+# skeleton-converter
 
 A conversion hub for 2D skeletal animation rigs. One canonical in-memory model,
 one importer and one exporter per format — currently Godot Skeleton2D scenes
@@ -33,6 +33,25 @@ python3 -m src.cli convert --to godot \
 ```
 
 Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
+The generated Spine output can also be previewed in the browser — see
+[Viewer](#viewer).
+
+## Viewer
+
+Every Godot→Spine conversion can be previewed without the Spine Editor:
+
+```bash
+python3 -m src.cli view out.json
+```
+
+Writes `viewer.html` beside the JSON — a reusable shell that loads the sibling
+`.json` + `.atlas` + image files, renders the rig via the official
+`spine-webgl` runtime (loaded from the CDN), and plays any animation on click.
+Nothing is embedded: regenerate the JSON and just refresh the page.
+
+Note: browsers block `fetch` of sibling files from `file://`, so serve the
+folder once — `python3 -m http.server` — and open
+`http://localhost:8000/viewer.html?skeleton=out.json`.
 
 ## The coordinate contract
 

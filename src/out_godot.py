@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from .model import Skeleton, godot_transform2d, invert, multiply
 from .out_spine import group_triangles
@@ -48,6 +49,7 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
     animation_resources, animation_refs = _emit_animations(model)
     content = _render_tscn(bone_nodes, polygon_nodes, animation_resources,
                            animation_refs, texture_path)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -147,12 +149,17 @@ def _emit_attachments(model, world, texture_path):
             ),
         ]
         if att.get("polygons"):
-            props.append(
-                "polygons = [%s]" % ", ".join(
-                    "PackedInt32Array(%s)" % ", ".join(str(i) for i in group)
-                    for group in att["polygons"]
+            groups = att["polygons"]
+            if groups and isinstance(groups[0], int):
+                # flat triangle index list: emit as one PackedInt32Array
+                props.append("polygons = [PackedInt32Array(%s)]" % ", ".join(str(i) for i in groups))
+            else:
+                props.append(
+                    "polygons = [%s]" % ", ".join(
+                        "PackedInt32Array(%s)" % ", ".join(str(i) for i in group)
+                        for group in groups
+                    )
                 )
-            )
         if weights:
             parts = []
             for bone_name, vertex_weights in weights:

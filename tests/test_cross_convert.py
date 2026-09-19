@@ -14,7 +14,7 @@ from src.out_spine import write_spine_json
 
 def test_bones_present_in_spine_json():
     model = read_godot_skeleton(str(FIXTURE))
-    spine = write_spine_json(model, output_path='')
+    spine = write_spine_json(model, output_path='/tmp/test_cross_convert.json')
     assert len(spine["bones"]) == len(model.bones)
     assert len(spine["slots"]) == len(model.attachments)
     assert len(spine["animations"]) == len(model.animations)

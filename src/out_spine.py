@@ -50,7 +50,8 @@ def resolve_texture_path(texture_path: str, scene_path: str) -> str | None:
     return texture_path
 
 
-def emit_atlas(model: Skeleton, atlas_path: str, image_name: str, image_path: str | None) -> str:
+def render_atlas(model: Skeleton, image_name: str, image_path: str | None = None) -> str:
+    """Render atlas text. Page size from the PNG IHDR when image_path resolves."""
     size = read_png_size(image_path) if image_path else None
     width, height = size if size else (1024, 1024)
     lines = [image_name, f"\tsize: {width}, {height}", "\tfilter: Linear, Linear"]
@@ -67,8 +68,7 @@ def emit_atlas(model: Skeleton, atlas_path: str, image_name: str, image_path: st
             int(round(min_x)), int(round(min_y)),
             int(round(span_x)), int(round(span_y)),
         ))
-    Path(atlas_path).write_text("\n".join(lines) + "\n")
-    return atlas_path
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -225,14 +225,18 @@ def group_triangles(triangles: list) -> list:
 # ---------------------------------------------------------------------------
 
 
-def write_spine_json(model: Skeleton, output_path: str, image_name: str | None = None) -> dict:
+def write_spine_json(model: Skeleton, output_path: str,
+                     image_name: str | None = None,
+                     image_path: str | None = None) -> dict:
     world = godot_world_transforms(model)
     bone_index = {bone.name: index for index, bone in enumerate(model.bones)}
+    output = Path(output_path)
+    image_name = image_name or "image.png"
 
     spine = {
         "skeleton": {
-            "spine": "4.1.23",
-            "x": 0, "y": 0, "width": 512, "height": 512,
+            "spine": "4.3.26",
+            "x": 0, "y": 0, "width": 0, "height": 0,
             "images": "./images/",
         },
         "bones": [],
@@ -240,6 +244,9 @@ def write_spine_json(model: Skeleton, output_path: str, image_name: str | None =
         "skins": [{"name": "default", "attachments": {}}],
         "animations": {},
     }
+    # Overwrite the placeholder with real setup-pose bounds so runtimes and the
+    # Spine Editor frame the skeleton correctly (width/height are hints).
+    _model_world = world
 
     for bone in model.bones:
         entry = {"name": bone.name}
@@ -358,4 +365,29 @@ def write_spine_json(model: Skeleton, output_path: str, image_name: str | None =
                 animation["bones"][bone_name] = bone_tracks
         spine["animations"][anim_name] = animation
 
+    # Atlas is named after the output JSON (not the source texture) so the
+    # Spine Editor's exact-string atlas lookup always matches: <json>.atlas
+    # declares <image_name>, which must equal the file inside ./images/.
+    # Real setup-pose bounds from attachment vertices in world space; the Spine
+    # Editor and viewers use them to frame the skeleton.
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
+    for att in model.attachments:
+        poly_world = world.get(att["name"]) or (world.get(model.bones[0].name) if model.bones else None)
+        if not poly_world:
+            continue
+        for v in att["polygon"]:
+            p = transform(poly_world, (v[0] + att["offset"][0], v[1] + att["offset"][1]))
+            min_x = min(min_x, p[0]); max_x = max(max_x, p[0])
+            min_y = min(min_y, p[1]); max_y = max(max_y, p[1])
+    if min_x <= max_x:
+        spine["skeleton"]["x"] = round(min_x, 2)
+        spine["skeleton"]["y"] = round(-max_y, 2)
+        spine["skeleton"]["width"] = round(max_x - min_x, 2) or 1
+        spine["skeleton"]["height"] = round(max_y - min_y, 2) or 1
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.with_suffix(".atlas").write_text(
+        render_atlas(model, image_name, image_path), encoding="utf-8")
+    Path(output_path).write_text(json.dumps(spine, indent=2), encoding="utf-8")
     return spine

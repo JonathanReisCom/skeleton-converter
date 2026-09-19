@@ -42,6 +42,6 @@
 ### Distribution
 
 - [ ] Godot editor plugin (right-click `.tscn` → export to Spine)
-- [ ] PyPI package (`pip install skeletonconverter`)
+- [ ] PyPI package (`pip install skeleton-converter`)
 - [ ] CI: GitHub Actions running round-trip tests on a matrix of Python versions
 - [ ] Import test in Spine Editor (the single most important untested claim)

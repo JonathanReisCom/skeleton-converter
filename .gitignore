@@ -21,6 +21,7 @@ package-lock.json
 # OS
 .DS_Store
 Thumbs.db
+tmp/
 
 # Godot generated files from test fixtures
 .godot/
