@@ -22,7 +22,12 @@ def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs,
         lines.append(f'&"{anim_name}": SubResource("{resource_id}"),')
     lines.append("}")
     lines.append("")
-    lines.append('[node name="Sprite2D" type="Node2D"]')
+    # Root container: the track paths and external samplers address bones as
+    # "Sprite2D/Skeleton2D/<bone>" relative to the scene root, so the root must
+    # be a container node, not Sprite2D itself. Without it every track path
+    # dangles ("parent path has vanished") and the scene instantiates empty.
+    lines.append('[node name="SkeletonRoot" type="Node2D"]')
+    lines.append('[node name="Sprite2D" type="Node2D" parent="."]')
     lines.append('[node name="Skeleton2D" type="Skeleton2D" parent="Sprite2D"]')
     for node in bone_nodes:
         lines.append(f'[node name="{node["name"]}" type="Bone2D" parent="{node["parent"]}"]')
@@ -190,11 +195,26 @@ def _emit_attachments(model, world, texture_path):
 # ---------------------------------------------------------------------------
 
 
+def _resource_id(anim_name: str) -> str:
+    """Godot sub_resource ids accept only letters, digits, and underscores.
+
+    Spine animation names are free-form ("head-turn", "crouch-from fall"), and
+    using one raw in ``id=`` makes Godot reject the resource with "the scene
+    unique ID must contain only letters, numbers, and underscores" — the scene
+    then fails to instantiate. The animation's real name is preserved in the
+    AnimationLibrary key; only the id is sanitized.
+    """
+    safe = "".join(c if (c.isalnum() or c == "_") else "_" for c in anim_name)
+    if not safe or safe[0].isdigit():
+        safe = "anim_" + safe
+    return f"Animation_{safe}"
+
+
 def _emit_animations(model):
     animation_resources = []
     animation_refs = []
     for anim_index, (anim_name, animation) in enumerate(model.animations.items(), start=1):
-        resource_id = f"Animation_{anim_name}"
+        resource_id = _resource_id(anim_name)
         tracks = []
         for bone_name, props in animation.items():
             bone = next((b for b in model.bones if b.name == bone_name), None)
@@ -203,11 +223,11 @@ def _emit_animations(model):
             bone_relative = bone.path
             if props.get("rotate"):
                 keys = [(k["time"], k["angle"]) for k in props["rotate"]]
-                track_path = f"SkeletonRoot/Sprite2D/Skeleton2D/{bone_relative}:rotation_degrees"
+                track_path = f"Sprite2D/Skeleton2D/{bone_relative}:rotation_degrees"
                 tracks.append(("rotation_degrees", keys, track_path))
             if props.get("translate"):
                 keys = [(k["time"], (k["x"], k["y"])) for k in props["translate"]]
-                track_path = f"SkeletonRoot/Sprite2D/Skeleton2D/{bone_relative}:position"
+                track_path = f"Sprite2D/Skeleton2D/{bone_relative}:position"
                 tracks.append(("position", keys, track_path))
         lines = [f'[sub_resource type="Animation" id="{resource_id}"]']
         length = 0.0

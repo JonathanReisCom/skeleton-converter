@@ -15,11 +15,11 @@ affiliated with Esoteric Software.
 ```bash
 cd <cloned repo>   # python -m needs the repo as working directory
 
-# Godot scene -> Spine JSON (+ .atlas)
-python3 -m src.cli convert --to spine path/to/player.tscn -o out.json
+# Godot scene -> Spine bundle (out/animation.json + .atlas + .png + index.html)
+python3 -m src.cli convert --to spine path/to/player.tscn -o out --name animation
 
-# Spine JSON -> Godot scene
-python3 -m src.cli convert --to godot path/to/hero.json -o out.tscn
+# Spine JSON -> Godot scene (out/animation.tscn + the page image)
+python3 -m src.cli convert --to godot path/to/hero.json -o out --name animation
 
 # Numeric diff between a Godot scene and a Spine JSON
 python3 -m src.cli compare rig.tscn out.json
@@ -28,17 +28,18 @@ python3 -m src.cli compare rig.tscn out.json
 Requires: `python3` (3.10+, zero dependencies), `node`, and the Godot 4 binary
 (`GODOT_BIN` env var, default `/Applications/Godot.app/Contents/MacOS/Godot`).
 The Spine-side validation needs `@esotericsoftware/spine-core` — run
-`bun install` or `npm install` once in the cloned repo's `skill/` directory.
+`npm install` once in the cloned repo's `validation/` directory.
 
 ## Workflow
 
 1. **Convert** with the command for your direction (Quick start).
-2. **Keep the bundle together**: `--to spine` writes four files sharing the
-   output stem — `<name>.json`, `<name>.atlas`, `<name>.png`, `index.html`. The
-   texture is copied for you and named after the output (never after the source
+2. **Keep the bundle together**: `-o` is a directory and `--name` is the output
+   stem (defaulting to the input's name). `--to spine` writes four files sharing
+   that stem — `<name>.json`, `<name>.atlas`, `<name>.png`, `index.html`. The
+   texture is copied for you and named after `--name` (never after the source
    PNG). The atlas declares the image name, so renaming or splitting them
-   breaks loading. `--to godot` needs `--atlas` (a sibling `.atlas` matching
-   the JSON's name is auto-detected) and `--texture` for the image path.
+   breaks loading. `--to godot` writes `<name>.tscn` plus the page image; it is
+   a Godot scene with no browser preview.
 3. **Validate numerically** — never by eye:
 
    ```bash

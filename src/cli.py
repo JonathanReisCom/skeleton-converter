@@ -7,39 +7,78 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import out_godot, out_spine, registry
+from . import in_spine, out_godot, out_spine, registry
 
 
 def convert(args: argparse.Namespace) -> int:
     reader = registry.READERS[args.from_format]
-    model = reader(args.input)
-    output = Path(args.output)
+    # -o is a DIRECTORY: the output is a bundle (json + atlas + texture +
+    # index.html for spine; a scene for godot), not a single file. The stem is
+    # --name, defaulting to the input's stem, so `-o out/` alone does the
+    # obvious thing instead of forcing a filename.
+    out_dir = Path(args.output)
+    if out_dir.suffix:
+        print(f"error: -o takes a directory, not a file: {out_dir}", file=sys.stderr)
+        print(f"       try: -o {out_dir.parent} --name {out_dir.stem}", file=sys.stderr)
+        return 2
+    name = args.name or Path(args.input).stem
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Spine input: the .atlas carries the page size and region rects. Without
+    # it UVs are computed against a 1x1 page and every region samples wrong.
+    # Accept an explicit --atlas, else auto-detect beside the input JSON.
+    atlas_path = args.atlas
+    if args.from_format == "spine" and not atlas_path:
+        # The atlas name does not always mirror the JSON's (hero-pro.json ships
+        # with hero.atlas), so fall back to the only .atlas beside the input.
+        sibling = Path(args.input).with_suffix(".atlas")
+        if sibling.exists():
+            atlas_path = str(sibling)
+        else:
+            candidates = sorted(Path(args.input).parent.glob("*.atlas"))
+            atlas_path = str(candidates[0]) if len(candidates) == 1 else None
+    model = reader(args.input, atlas_path) if atlas_path else reader(args.input)
     if args.to_format == "spine":
+        output = out_dir / f"{name}.json"
         image_path = out_spine.resolve_texture_path(model.texture_path, args.input)
         # One stem for the whole bundle: the atlas is named after the output
-        # JSON, so the page image is too. Keeping the source texture's name
-        # (gBot.png) beside animation.json/animation.atlas reads as a stray
-        # file and makes the handoff ambiguous.
-        image_name = (
-            output.stem + Path(image_path).suffix if image_path else "image.png"
-        )
-        out_spine.write_spine_json(model, args.output, image_name=image_name,
+        # JSON, so the page image is too.
+        image_name = name + Path(image_path).suffix if image_path else "image.png"
+        out_spine.write_spine_json(model, str(output), image_name=image_name,
                                    image_path=image_path)
         # Complete handoff: texture beside the JSON (the atlas names it) and a
         # reusable viewer shell, so the output folder is immediately servable.
-        if image_path and Path(image_path) != output.parent / image_name:
-            shutil.copy2(image_path, output.parent / image_name)
+        if image_path and Path(image_path) != out_dir / image_name:
+            shutil.copy2(image_path, out_dir / image_name)
         from . import viewer_out
-        viewer_path = viewer_out.emit_viewer(str(output.parent / "index.html"),
-                                             skeleton_json_path=args.output)
-        print(f"wrote {args.output} + {output.with_suffix('.atlas').name}")
-        print(f"wrote {image_name} (texture) + {Path(viewer_path).name}")
-        print("preview: python3 -m http.server --directory "
-              f"{output.parent} then open http://localhost:8000/")
+        viewer_out.emit_viewer(str(out_dir / "index.html"),
+                               skeleton_json_path=str(output))
+        print(f"wrote {output} + {output.with_suffix('.atlas').name}")
+        print(f"wrote {image_name} (texture) + index.html")
+        print(f"preview: python3 -m http.server --directory {out_dir} "
+              "then open http://localhost:8000/")
     else:
-        texture = args.texture or model.texture_path or "res://image.png"
-        out_godot.write_godot_scene(model, args.output, texture_path=texture)
-        print(f"wrote {args.output}")
+        output = out_dir / f"{name}.tscn"
+        # Spine→Godot: the atlas names the real page image. Resolve it the same
+        # way the reader does, instead of falling back to res://image.png —
+        # a scene referencing a texture that does not exist will not load.
+        # Without an explicit --texture the image is copied beside the scene
+        # under the --name stem, so the bundle reads as one unit (the same rule
+        # the spine side follows); an explicit --texture is honoured as-is.
+        image = in_spine.resolve_image_for_atlas(atlas_path, "")
+        if args.texture:
+            texture = args.texture
+        elif image:
+            texture = "res://" + name + Path(image).suffix
+        else:
+            texture = "res://image.png"
+        out_godot.write_godot_scene(model, str(output), texture_path=texture)
+        if image and not args.texture and Path(image).exists():
+            dest = out_dir / (name + Path(image).suffix)
+            if Path(image).resolve() != dest.resolve():
+                shutil.copy2(image, dest)
+        print(f"wrote {output}")
+        print(f"texture: {texture}" + ("" if args.texture else " (copied beside the scene)"))
+        print("note: a .tscn is a Godot scene — load it in Godot, not a browser")
     print(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
           f"{len(model.animations)} animations")
     return 0
@@ -93,7 +132,10 @@ def main() -> int:
     convert_parser.add_argument("--to", dest="to_format",
                                 choices=list(registry.WRITERS), required=True)
     convert_parser.add_argument("input")
-    convert_parser.add_argument("-o", "--output", required=True)
+    convert_parser.add_argument("-o", "--output", required=True,
+                                help="output directory (created if missing)")
+    convert_parser.add_argument("--name", default=None,
+                                help="output stem; defaults to the input's name")
     convert_parser.add_argument("--atlas", default=None,
                                 help=".atlas beside the input JSON (Spine→Godot)")
     convert_parser.add_argument("--texture", default=None,

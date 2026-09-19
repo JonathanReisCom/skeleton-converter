@@ -1,0 +1,8 @@
+{
+  "name": "skeleton-converter-validation",
+  "private": true,
+  "description": "Dev-only harness: samples the official Spine runtime to compare against Godot poses. Never imported by the converter.",
+  "dependencies": {
+    "@esotericsoftware/spine-core": "4.2.120"
+  }
+}

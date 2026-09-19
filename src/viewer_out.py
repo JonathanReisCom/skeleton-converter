@@ -57,7 +57,12 @@ TEMPLATE = """<!doctype html>
 // shell at generation time. The first animation autoplays.
 const SKELETON_URL = new URLSearchParams(location.search).get("skeleton")
   || "__DEFAULT_SKELETON__";
-const ATLAS_URL = SKELETON_URL.replace(/\\.json$/, ".atlas");
+// The atlas name does not always mirror the JSON's (hero-pro.json ships with
+// hero.atlas), so use the one resolved at generation time, then fall back to
+// the same-stem guess for ?skeleton= overrides.
+const ATLAS_URL = new URLSearchParams(location.search).get("atlas")
+  || "__DEFAULT_ATLAS__"
+  || SKELETON_URL.replace(/\\.json$/, ".atlas");
 const FIRST_ANIMATION = "__FIRST_ANIMATION__";
 
 const canvas = document.getElementById("canvas");
@@ -164,26 +169,44 @@ new spine.SpineCanvas(canvas, {
 """
 
 
+def _find_atlas(json_path: Path) -> str:
+    """The .atlas to load for this skeleton.
+
+    Its name does not always mirror the JSON's — the official hero rig ships
+    hero-pro.json beside hero.atlas — so prefer a same-stem sibling, then the
+    only .atlas in the folder.
+    """
+    sibling = json_path.with_suffix(".atlas")
+    if sibling.exists():
+        return sibling.name
+    candidates = sorted(json_path.parent.glob("*.atlas"))
+    return candidates[0].name if len(candidates) == 1 else ""
+
+
 def emit_viewer(output_path: str, skeleton_json_path: str | None = None) -> str:
     """Write the reusable viewer shell.
 
-    The shell loads ``<name>.json`` + ``<name>.atlas`` + the atlas image from
-    its own directory (or a skeleton passed via ?skeleton= query). Nothing is
+    The shell loads the skeleton JSON, its .atlas, and the atlas image from its
+    own directory (or a skeleton passed via ?skeleton= query). Nothing is
     embedded; when assets change, just refresh the page.
     """
     if skeleton_json_path:
-        skeleton_json = json.loads(Path(skeleton_json_path).read_text(encoding="utf-8"))
+        json_path = Path(skeleton_json_path)
+        skeleton_json = json.loads(json_path.read_text(encoding="utf-8"))
         animations = list(skeleton_json.get("animations", {}).keys())
         first = animations[0] if animations else ""
-        default_skeleton = Path(skeleton_json_path).name
+        default_skeleton = json_path.name
+        default_atlas = _find_atlas(json_path)
     else:
         first = ""
         default_skeleton = ""
+        default_atlas = ""
     html = (
         TEMPLATE
         .replace("__RUNTIME_URL__", RUNTIME_URL)
         .replace("__FIRST_ANIMATION__", first)
         .replace("__DEFAULT_SKELETON__", default_skeleton)
+        .replace("__DEFAULT_ATLAS__", default_atlas)
     )
     Path(output_path).write_text(html, encoding="utf-8")
     return output_path

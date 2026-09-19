@@ -74,14 +74,39 @@ runtime version with the `spine` data version emitted by `out_spine.py`
 (4.3.26) — the two are independent, and a 4.2 runtime reads 4.3 data fine.
 Verified: `4.2.120` renders the demo rig; `4.3.13` renders nothing.
 
+### Rule: the atlas name does not mirror the JSON's name
+
+`hero-pro.json` ships with `hero.atlas` — not `hero-pro.atlas`. Deriving the
+atlas path by swapping the JSON's extension (a natural-looking shortcut) makes
+the viewer request a file that does not exist and fail with a 404, even though
+the skeleton itself is fine. Resolve the atlas by looking for a same-stem
+sibling first, then the only `.atlas` in the folder, and bake the result into
+the generated shell. The CLI does the same for `--from spine`; `?atlas=` in the
+URL overrides it when a folder holds several rigs.
+
+### Rule: a Godot scene does not run in a browser
+
+`--to godot` writes a `.tscn` — a Godot scene. There is no web viewer for it,
+and `python3 -m http.server` serving that folder renders nothing useful: the
+browser is handed Godot scene text. Only `--to spine` produces a previewable
+bundle (JSON + atlas + texture + `index.html`). To see a converted Godot rig,
+load the `.tscn` in Godot or validate numerically; do not reach for the browser.
+
+Because a scene written to a `.json` path looks servable and is not, `convert`
+takes `-o` as a **directory** plus `--name` for the stem (defaulting to the
+input's name) and rejects a `-o` that ends in a file extension.
+
 ### Rule: the output bundle shares one stem
 
 `convert --to spine` writes four files that only work together: the JSON, the
-`.atlas`, the page image, and `index.html`. All four take the **output file's
-stem**, never the source texture's name — `-o animation.json` yields
-`animation.json`, `animation.atlas`, `animation.png`, `index.html`. The atlas
-declares the image name on its first line and the runtime resolves it as a
-sibling, so a mismatched name is a load failure, not a cosmetic wart. The
+`.atlas`, the page image, and `index.html`. All four take the **`--name`
+stem** (or the input's name when `--name` is omitted), never the source
+texture's name — `--name animation` yields
+`animation.json`, `animation.atlas`, `animation.png`, `index.html`. `--to godot`
+follows the same rule: `animation.tscn` plus the page image copied as
+`animation.png` (pass `--texture` to keep a specific `res://` path instead).
+The atlas declares the image name on its first line and the runtime resolves it
+as a sibling, so a mismatched name is a load failure, not a cosmetic wart. The
 Spine Editor's atlas lookup is an exact string match on `<json>.atlas` too.
 
 Do not "preserve" the source texture name (`gBot.png`) beside
@@ -146,6 +171,61 @@ Two traps this catches:
 
 Pick an animation with real movement (`walk`, `run`) — some animations such as
 `fall` are nearly static by design and prove nothing.
+
+### Rule: a passing round-trip test does not prove the .tscn loads
+
+Reading a generated `.tscn` back with our own parser only proves the parser and
+the writer agree. It cannot catch a scene Godot refuses to instantiate. Four
+bugs of exactly that class survived a green test suite:
+
+- **Phantom node in track paths.** Tracks were emitted as
+  `SkeletonRoot/Sprite2D/Skeleton2D/<bone>` while the writer emitted `Sprite2D`
+  as the scene root — no `SkeletonRoot` node existed. Godot logged "parent path
+  has vanished" per node and instantiated an empty scene; our reader silently
+  matched nothing, so every animation came back with **zero** tracks. The root
+  container node and the track prefix must agree.
+- **Unsanitized sub_resource ids.** Spine animation names are free-form
+  (`head-turn`, `crouch-from fall`). Used raw in `id=`, Godot rejects the
+  resource with "the scene unique ID must contain only letters, numbers, and
+  underscores" and the scene fails to load. Ids are sanitized; the real name
+  stays in the AnimationLibrary key.
+- **Texture path that does not exist.** Falling back to `res://image.png` when
+  the atlas could not be resolved yields a scene referencing a missing texture
+  — a parse error per attachment. Resolve the image from the atlas instead.
+- **The `--atlas` flag was never passed to the reader.** UVs were then computed
+  against a 1x1 page and every region sampled wrong, silently.
+
+The check that catches all of them is loading the generated scene in the real
+engine and asserting it instantiates with the expected node/bone count and
+non-zero animation tracks:
+
+```bash
+# needs a Godot project dir; --import first so textures register
+godot --headless --path <project> --script res://sample_pose.gd -- \
+      res://<scene>.tscn <animation> <time>
+```
+
+An empty `POSE` list, or any `ERROR`/`SCRIPT ERROR` line, is a failure — even
+when the round-trip test is green.
+
+### Rule: know what the validation tolerance excludes
+
+A FAIL is not automatically a converter bug. Spine rigs commonly use
+constraints the converter does not implement (IK, path, physics), and the
+influenced bones will deviate by design. Read the constraint targets before
+concluding:
+
+```bash
+python3 -c "import json;d=json.load(open('<rig>.json'));print(d.get('ik'),d.get('path'))"
+```
+
+In the official `hero` sample, `left-leg`/`right-leg` drive `thigh*`/`shin*`,
+`look-constraint` drives `head`, and a path constraint drives `chain1..8` —
+exactly the bones that diverge (up to 226 units). Bones outside those chains
+still differ by ~0.1–0.4, which is a real gap: Spine `scale` animation tracks
+are dropped (see ROADMAP), and `inherit: noRotationOrReflection` is emulated.
+Report which bones fail and why, rather than calling the whole conversion
+wrong or widening the tolerance.
 
 ## Docs maintenance
 

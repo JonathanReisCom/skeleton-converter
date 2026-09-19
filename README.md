@@ -28,23 +28,28 @@ current directory, so it fails with `No module named 'src'` anywhere else:
 ```bash
 cd /path/to/skeleton-converter
 
-# Godot scene -> Spine JSON: writes out.json, out.atlas, out.png, index.html
+# Godot scene -> Spine bundle: out/animation.json + .atlas + .png + index.html
 python3 -m src.cli convert --to spine \
-  path/to/player.tscn -o out.json
+  path/to/player.tscn -o out --name animation
 
-# Spine JSON -> Godot scene (requires the .atlas beside the input JSON)
+# Spine JSON -> Godot scene: out/animation.tscn + the page image
 python3 -m src.cli convert --to godot \
-  path/to/hero.json -o out.tscn --texture res://player/gBot.png
+  path/to/hero.json -o out --name animation
 ```
 
-`--to spine` names the whole bundle after the output file, not the source
-texture: `-o animation.json` produces `animation.json`, `animation.atlas`,
-`animation.png`, and `index.html`. The atlas declares the image name, so all
-four must stay together and keep those names.
+`-o` is a **directory** (created if missing) and `--name` is the output stem;
+omit `--name` and it defaults to the input file's name (`player.tscn` →
+`player.json`). One name drives the whole bundle: for `--to spine` that is
+`animation.json`, `animation.atlas`, `animation.png`, and `index.html`; for
+`--to godot` it is `animation.tscn` plus the page image renamed to
+`animation.png`. The atlas and the scene both reference the image by name, so
+the files must stay together and keep those names. Pass `--texture` to keep a
+specific `res://` path instead of the copied image.
+
+A `.tscn` is a Godot scene: there is no browser preview for it. Only `--to
+spine` writes a servable `index.html` — see [Viewer](#viewer).
 
 Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
-The generated Spine output can also be previewed in the browser — see
-[Viewer](#viewer).
 
 ## Viewer
 
