@@ -62,6 +62,44 @@ npm. That dependency is dev-only, must never be imported by the converter, and
 its license requires that each user obtain their own Spine Editor license. Keep
 the converter stdlib-only so the product itself has no license friction.
 
+### Rule: the viewer runtime is pinned, and its version is not the data version
+
+`src/viewer_out.py` loads `spine-webgl` from the unpkg CDN at a **pinned**
+version. The shell drives the `SpineCanvas` app API (`app.loadAssets`,
+`app.renderer`, `app.assetManager`); spine-webgl 4.3 removed that API —
+`SpineCanvas.prototype` there exposes only `clear()` and `dispose()`. A 4.3
+runtime therefore loads the skeleton, logs no error, and renders **zero
+pixels**: a silent failure that looks like a rig bug. Do not "align" the
+runtime version with the `spine` data version emitted by `out_spine.py`
+(4.3.26) — the two are independent, and a 4.2 runtime reads 4.3 data fine.
+Verified: `4.2.120` renders the demo rig; `4.3.13` renders nothing.
+
+### Rule: the output bundle shares one stem
+
+`convert --to spine` writes four files that only work together: the JSON, the
+`.atlas`, the page image, and `index.html`. All four take the **output file's
+stem**, never the source texture's name — `-o animation.json` yields
+`animation.json`, `animation.atlas`, `animation.png`, `index.html`. The atlas
+declares the image name on its first line and the runtime resolves it as a
+sibling, so a mismatched name is a load failure, not a cosmetic wart. The
+Spine Editor's atlas lookup is an exact string match on `<json>.atlas` too.
+
+Do not "preserve" the source texture name (`gBot.png`) beside
+`animation.json`: it reads as a stray file and makes the handoff ambiguous.
+
+### Rule: the viewer shell stays static and path-agnostic
+
+The shell is generated HTML that `fetch`es sibling files. It must never embed
+skeleton data, atlas, or image bytes, and it must never hardcode an absolute
+path. Consequences to respect:
+
+- Output filename is `index.html`, so `python3 -m http.server --directory
+  <out>` serves the rig at `/` with no query string.
+- The skeleton is selected by `?skeleton=<name>.json`, defaulting to the JSON
+  name baked in at generation time. A folder with one rig needs no arguments.
+- `file://` cannot `fetch` siblings, so the viewer only works over HTTP.
+  Regenerating the JSON is the refresh path — no rebuild of the shell.
+
 ## Adding a format
 
 1. Write the importer: format file → canonical model.
@@ -80,6 +118,34 @@ rig that *looks* plausible but has silent coordinate bugs. The only defense is
 numeric comparison against the real engine at sampled animation times. Reading
 the code, checking field names, or eyeballing the output in an editor are all
 insufficient.
+
+### Rule: a rendered frame is not proof of animation
+
+The viewer can render a correct-looking pose and be completely static. A
+screenshot proves the rig loads and the texture binds — nothing more. Animation
+must be verified by sampling **world** transforms at two moments and asserting
+they differ:
+
+```js
+// In the running page: sample twice, ~1s apart, after starting an animation.
+const pose = () => window.__skeleton.bones.map(b => [b.worldX, b.worldY]);
+```
+
+Two traps this catches:
+
+- **`Skeleton.update(delta)` does not recompute the pose.** In the 4.2 runtime
+  it is literally `this.time += delta`. Without an `updateWorldTransform` in
+  the render loop, `trackTime` advances and local `rotation` changes while
+  every `worldX`/`worldY` stays frozen — the rig renders its setup pose
+  forever and nothing errors. The loop must call `skeleton.update(delta)` *and*
+  `skeleton.updateWorldTransform(spine.Physics.update)`.
+- **Sampling the wrong field.** `bone.a/b/c/d` and `worldX/worldY` are only
+  written by `updateWorldTransform`; `bone.rotation` is the local pose written
+  by `state.apply`. A probe reading local fields sees motion that the screen
+  does not, and a probe reading world fields after the bug sees none.
+
+Pick an animation with real movement (`walk`, `run`) — some animations such as
+`fall` are nearly static by design and prove nothing.
 
 ## Docs maintenance
 

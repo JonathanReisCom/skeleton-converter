@@ -16,7 +16,13 @@ def convert(args: argparse.Namespace) -> int:
     output = Path(args.output)
     if args.to_format == "spine":
         image_path = out_spine.resolve_texture_path(model.texture_path, args.input)
-        image_name = Path(image_path).name if image_path else "image.png"
+        # One stem for the whole bundle: the atlas is named after the output
+        # JSON, so the page image is too. Keeping the source texture's name
+        # (gBot.png) beside animation.json/animation.atlas reads as a stray
+        # file and makes the handoff ambiguous.
+        image_name = (
+            output.stem + Path(image_path).suffix if image_path else "image.png"
+        )
         out_spine.write_spine_json(model, args.output, image_name=image_name,
                                    image_path=image_path)
         # Complete handoff: texture beside the JSON (the atlas names it) and a
@@ -24,12 +30,12 @@ def convert(args: argparse.Namespace) -> int:
         if image_path and Path(image_path) != output.parent / image_name:
             shutil.copy2(image_path, output.parent / image_name)
         from . import viewer_out
-        viewer_path = viewer_out.emit_viewer(str(output.parent / "viewer.html"),
+        viewer_path = viewer_out.emit_viewer(str(output.parent / "index.html"),
                                              skeleton_json_path=args.output)
         print(f"wrote {args.output} + {output.with_suffix('.atlas').name}")
         print(f"wrote {image_name} (texture) + {Path(viewer_path).name}")
-        print("preview: serve this folder and open "
-              f"viewer.html?skeleton={output.name}")
+        print("preview: python3 -m http.server --directory "
+              f"{output.parent} then open http://localhost:8000/")
     else:
         texture = args.texture or model.texture_path or "res://image.png"
         out_godot.write_godot_scene(model, args.output, texture_path=texture)
@@ -65,12 +71,12 @@ def compare(args: argparse.Namespace) -> int:
 def view(args: argparse.Namespace) -> int:
     from . import viewer_out
     out = viewer_out.emit_viewer(
-        str(Path(args.skeleton).with_name("viewer.html")),
+        str(Path(args.skeleton).with_name("index.html")),
         skeleton_json_path=args.skeleton,
     )
     print(f"wrote {out}")
-    print(f"serve the folder (python3 -m http.server) and open it with "
-          f"?skeleton={Path(args.skeleton).name}")
+    print("preview: python3 -m http.server --directory "
+          f"{Path(args.skeleton).parent} then open http://localhost:8000/")
     return 0
 
 

@@ -12,7 +12,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-# Must match the data version declared by write_spine_json (out_spine.py).
+# Pinned to the 4.2 line on purpose: the shell drives the SpineCanvas *app* API
+# (app.loadAssets / app.renderer / app.assetManager), which 4.3 removed —
+# SpineCanvas.prototype there exposes only clear() and dispose(). Bumping this
+# to a 4.3.x build loads the skeleton and reports no error, then renders zero
+# pixels, so the breakage is silent. Unrelated to the data version written by
+# out_spine.py (4.3.26): a 4.2 runtime reads 4.3 data fine.
 SPINE_WEBGL_VERSION = "4.2.120"
 RUNTIME_URL = f"https://unpkg.com/@esotericsoftware/spine-webgl@{SPINE_WEBGL_VERSION}/dist/iife/spine-webgl.js"
 
@@ -107,9 +112,11 @@ new spine.SpineCanvas(canvas, {
       state.apply(skeleton);
       skeleton.update(0);
       skeleton.updateWorldTransform(spine.Physics.update);
+      // Debug handles: the verification rule in AGENTS.md samples these from a
+      // running page to prove the rig animates. Keep the names stable.
       window.__skeleton = skeleton;
-      window.__renderer = app.renderer;
       window.__state = state;
+      window.__renderer = app.renderer;
 
       const camera = app.renderer.camera;
       // Frame the skeleton from its real setup-pose bounds. The ortho camera
@@ -126,7 +133,14 @@ new spine.SpineCanvas(canvas, {
         state.update(delta);
         state.apply(skeleton);
       }
-      if (skeleton) skeleton.update(delta);
+      if (skeleton) {
+        // Skeleton.update(delta) only advances the clock (this.time += delta).
+        // The pose stays frozen in the world until updateWorldTransform runs,
+        // so without this the rig renders a static setup pose while the
+        // animation state happily advances.
+        skeleton.update(delta);
+        skeleton.updateWorldTransform(spine.Physics.update);
+      }
     },
     render: (app) => {
       if (!skeleton) return;

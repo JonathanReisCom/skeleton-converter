@@ -22,8 +22,13 @@ against the real engines instead of trusting inspection.
 
 ## Quick start
 
+Run from the repo root — `python3 -m src.cli` resolves `src` relative to the
+current directory, so it fails with `No module named 'src'` anywhere else:
+
 ```bash
-# Godot scene -> Spine JSON (writes out.json + out.atlas)
+cd /path/to/skeleton-converter
+
+# Godot scene -> Spine JSON: writes out.json, out.atlas, out.png, index.html
 python3 -m src.cli convert --to spine \
   path/to/player.tscn -o out.json
 
@@ -31,6 +36,11 @@ python3 -m src.cli convert --to spine \
 python3 -m src.cli convert --to godot \
   path/to/hero.json -o out.tscn --texture res://player/gBot.png
 ```
+
+`--to spine` names the whole bundle after the output file, not the source
+texture: `-o animation.json` produces `animation.json`, `animation.atlas`,
+`animation.png`, and `index.html`. The atlas declares the image name, so all
+four must stay together and keep those names.
 
 Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
 The generated Spine output can also be previewed in the browser — see
@@ -44,14 +54,24 @@ Every Godot→Spine conversion can be previewed without the Spine Editor:
 python3 -m src.cli view out.json
 ```
 
-Writes `viewer.html` beside the JSON — a reusable shell that loads the sibling
+Writes `index.html` beside the JSON — a reusable shell that loads the sibling
 `.json` + `.atlas` + image files, renders the rig via the official
-`spine-webgl` runtime (loaded from the CDN), and plays any animation on click.
+`spine-webgl` runtime (loaded from the CDN), and autoplays the first animation.
 Nothing is embedded: regenerate the JSON and just refresh the page.
 
 Note: browsers block `fetch` of sibling files from `file://`, so serve the
-folder once — `python3 -m http.server` — and open
-`http://localhost:8000/viewer.html?skeleton=out.json`.
+folder once — `convert` prints the exact command:
+
+```bash
+python3 -m http.server --directory /path/to/out
+```
+
+Then open `http://localhost:8000/` — `index.html` is served automatically, no
+query string. Use `?skeleton=other.json` only when the folder holds several rigs.
+
+The `spine-webgl` version is pinned to the 4.2 line in `src/viewer_out.py`. Do
+not bump it to 4.3: the shell drives the `SpineCanvas` app API, which 4.3
+removed, and a 4.3 runtime loads the skeleton without error and renders nothing.
 
 ## The coordinate contract
 

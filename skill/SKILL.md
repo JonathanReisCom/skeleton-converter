@@ -33,10 +33,12 @@ The Spine-side validation needs `@esotericsoftware/spine-core` — run
 ## Workflow
 
 1. **Convert** with the command for your direction (Quick start).
-2. **Check side files**: `--to spine` writes `out.atlas` beside the JSON — copy
-   the source PNG beside it before loading in a runtime. `--to godot` needs
-   `--atlas` (sibling `.atlas` with the JSON's name is auto-detected) and
-   `--texture` for the image path.
+2. **Keep the bundle together**: `--to spine` writes four files sharing the
+   output stem — `<name>.json`, `<name>.atlas`, `<name>.png`, `index.html`. The
+   texture is copied for you and named after the output (never after the source
+   PNG). The atlas declares the image name, so renaming or splitting them
+   breaks loading. `--to godot` needs `--atlas` (a sibling `.atlas` matching
+   the JSON's name is auto-detected) and `--texture` for the image path.
 3. **Validate numerically** — never by eye:
 
    ```bash
@@ -48,6 +50,19 @@ The Spine-side validation needs `@esotericsoftware/spine-core` — run
    deviation ≥ 0.01 is a bug — never widen the tolerance.
 4. **If FAIL**: read the coordinate contract in [REFERENCE.md](REFERENCE.md) —
    nearly every failure is one of the ten traps documented there.
+5. **Preview the result** without the Spine Editor — `convert --to spine`
+   writes a complete bundle (`out.json`, `out.atlas`, the texture, and
+   `index.html`). Serve the folder and open the root:
+
+   ```bash
+   python3 -m http.server 8000 --directory /path/to/out
+   # open http://localhost:8000/ — autoplays the first animation
+   ```
+
+   The shell `fetch`es sibling files, so it needs HTTP (`file://` is blocked).
+   Its `spine-webgl` version is pinned to the 4.2 line on purpose: the shell
+   drives the `SpineCanvas` app API that 4.3 removed, and a 4.3 runtime loads
+   the rig without error then renders nothing. Do not bump it.
 
 ## Rules
 
