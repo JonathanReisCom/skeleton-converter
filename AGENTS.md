@@ -172,6 +172,35 @@ Two traps this catches:
 Pick an animation with real movement (`walk`, `run`) — some animations such as
 `fall` are nearly static by design and prove nothing.
 
+### Rule: shortcuts live in the Makefile, not a JS task runner
+
+`make` wraps the two conversion flows (`godot-to-spine`, `spine-to-godot`,
+`test`). Do not add a `package.json` at the repo root or a pnpm/npm script to
+drive Python: the converter's whole promise is "zero third-party
+dependencies", and `validation/package.json` is the only Node manifest — it is
+dev-only and must stay that way.
+
+Two details the targets must keep:
+
+- **`make` runs in the repo root**, which is exactly what `python3 -m src.cli`
+  needs. That is why the shortcuts work from any directory while the raw
+  command does not.
+- **Only `godot-to-spine` serves.** It writes a previewable bundle; the
+  Spine→Godot direction writes a `.tscn`, so its target prints where to load
+  the scene rather than starting a server over a folder no browser can render.
+
+Machine-specific paths belong in `local.mk` (gitignored), never in the
+committed `Makefile`. Both targets refuse an empty input and refuse to
+`rm -rf` an output of `/`.
+
+**Progress output is a contract.** Every step prints as `--> <what>`, and the
+CLI reports what it actually did with the source: the atlas it used, which
+constraints it baked and which the active skin skipped, how many bones were
+baked. That information is collected by the reader into `Skeleton.notes`, not
+recomputed by the CLI — the reader is the only layer that knows. Do not add a
+step that reports something the caller cannot verify (a bare "processing…"),
+and do not duplicate a line the CLI already prints from the Makefile.
+
 ### Rule: port solvers from the runtime, never from its documentation
 
 `src/constraints.py` bakes Spine's IK and path constraints by porting the

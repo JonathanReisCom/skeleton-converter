@@ -51,6 +51,52 @@ spine` writes a servable `index.html` — see [Viewer](#viewer).
 
 Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
 
+## Shortcuts
+
+`make` wraps the two flows, so you do not retype paths or remember which
+direction is previewable. Put your rig paths in `local.mk` (gitignored; copy
+the lines from the Makefile header) and then:
+
+```bash
+make godot-to-spine    # .tscn -> bundle, then serves it at :8642
+make spine-to-godot    # Spine JSON -> .tscn + page image
+make test
+```
+
+Anything can be overridden per run:
+
+```bash
+make godot-to-spine GODOT_INPUT=path/to/player.tscn NAME=bot PORT=9000
+```
+
+Only `godot-to-spine` starts a server, because only that direction produces a
+browser-viewable bundle; `spine-to-godot` prints where to load the scene
+instead. Both refuse to run without an input path, and refuse to `rm -rf` an
+output of `/`.
+
+Every step is printed as it happens, including what the source rig contained:
+
+```
+--> clearing old output: ~/Desktop/convert-spine-to-godot
+--> converting Spine JSON -> Godot scene
+--> reading spine: .../hero/export/hero-pro.json
+--> destination: ~/Desktop/convert-spine-to-godot
+--> name: animation
+--> atlas: .../hero/export/hero.atlas
+--> constraints baked (skin 'default'): left-leg, look-constraint, right-leg
+--> constraints skipped: 1 not active under this skin
+--> baked bones: 9
+--> writing Godot scene (.tscn + page image)
+--> wrote animation.tscn, animation.png
+--> texture: res://animation.png (copied beside the scene)
+--> 44 bones, 30 attachments, 12 animations
+--> next: load .../animation.tscn in Godot — a .tscn is a scene, not a web page
+```
+
+The `constraints baked` line matters: IK and path constraints are solved and
+written into the keys, so seeing which ones ran (and which the active skin
+skipped) tells you whether the output can reproduce the source.
+
 ## Viewer
 
 Every Godot→Spine conversion can be previewed without the Spine Editor:

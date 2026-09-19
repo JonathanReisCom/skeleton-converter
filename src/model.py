@@ -163,6 +163,10 @@ class Skeleton:
     animations: dict = field(default_factory=dict)   # name -> {bone: {rotate/translate: [...]}}
     texture_path: str = ""                           # res:// path from the source scene
     by_name: dict = field(default_factory=dict)      # bone name → Bone, populated by readers
+    # Facts the reader learned that the caller should report rather than
+    # rediscover: which atlas was used, which constraints were baked, what the
+    # format could not represent. Free-form strings, printed by the CLI.
+    notes: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

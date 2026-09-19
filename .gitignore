@@ -23,6 +23,12 @@ package-lock.json
 Thumbs.db
 tmp/
 
+# Test cache
+.pytest_cache/
+
+# Personal Makefile overrides (machine-specific paths)
+local.mk
+
 # Godot generated files from test fixtures
 .godot/
 *.import

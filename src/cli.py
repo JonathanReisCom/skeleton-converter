@@ -10,6 +10,11 @@ from pathlib import Path
 from . import in_spine, out_godot, out_spine, registry
 
 
+def _step(text: str) -> None:
+    """One progress line, so the user sees what is happening and with what."""
+    print(f"--> {text}")
+
+
 def convert(args: argparse.Namespace) -> int:
     reader = registry.READERS[args.from_format]
     # -o is a DIRECTORY: the output is a bundle (json + atlas + texture +
@@ -22,6 +27,8 @@ def convert(args: argparse.Namespace) -> int:
         print(f"       try: -o {out_dir.parent} --name {out_dir.stem}", file=sys.stderr)
         return 2
     name = args.name or Path(args.input).stem
+
+    _step(f"reading {args.from_format}: {args.input}")
     out_dir.mkdir(parents=True, exist_ok=True)
     # Spine input: the .atlas carries the page size and region rects. Without
     # it UVs are computed against a 1x1 page and every region samples wrong.
@@ -37,7 +44,14 @@ def convert(args: argparse.Namespace) -> int:
             candidates = sorted(Path(args.input).parent.glob("*.atlas"))
             atlas_path = str(candidates[0]) if len(candidates) == 1 else None
     model = reader(args.input, atlas_path) if atlas_path else reader(args.input)
+
+    _step(f"destination: {out_dir}")
+    _step(f"name: {name}")
+    for note in model.notes:
+        _step(note)
+
     if args.to_format == "spine":
+        _step(f"writing Spine bundle (json + atlas + texture + viewer)")
         output = out_dir / f"{name}.json"
         image_path = out_spine.resolve_texture_path(model.texture_path, args.input)
         # One stem for the whole bundle: the atlas is named after the output
@@ -52,11 +66,14 @@ def convert(args: argparse.Namespace) -> int:
         from . import viewer_out
         viewer_out.emit_viewer(str(out_dir / "index.html"),
                                skeleton_json_path=str(output))
-        print(f"wrote {output} + {output.with_suffix('.atlas').name}")
-        print(f"wrote {image_name} (texture) + index.html")
-        print(f"preview: python3 -m http.server --directory {out_dir} "
-              "then open http://localhost:8000/")
+        _step(f"wrote {output.name}, {output.with_suffix('.atlas').name}, "
+              f"{image_name}, index.html")
+        _step(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
+              f"{len(model.animations)} animations")
+        _step("preview: python3 -m http.server --directory "
+              f"{out_dir}   then open http://localhost:8000/")
     else:
+        _step("writing Godot scene (.tscn + page image)")
         output = out_dir / f"{name}.tscn"
         # Spine→Godot: the atlas names the real page image. Resolve it the same
         # way the reader does, instead of falling back to res://image.png —
@@ -76,11 +93,15 @@ def convert(args: argparse.Namespace) -> int:
             dest = out_dir / (name + Path(image).suffix)
             if Path(image).resolve() != dest.resolve():
                 shutil.copy2(image, dest)
-        print(f"wrote {output}")
-        print(f"texture: {texture}" + ("" if args.texture else " (copied beside the scene)"))
-        print("note: a .tscn is a Godot scene — load it in Godot, not a browser")
-    print(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
-          f"{len(model.animations)} animations")
+        wrote = output.name
+        if not args.texture and image:
+            wrote += f", {name}{Path(image).suffix}"
+        _step(f"wrote {wrote}")
+        _step(f"texture: {texture}"
+              + (" (copied beside the scene)" if not args.texture else ""))
+        _step(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
+              f"{len(model.animations)} animations")
+        _step(f"next: load {output} in Godot — a .tscn is a scene, not a web page")
     return 0
 
 

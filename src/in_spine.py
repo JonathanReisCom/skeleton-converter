@@ -162,6 +162,12 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
 
     model = Skeleton()
     model.texture_path = ""
+    if atlas_path:
+        model.notes.append(f"atlas: {atlas_path}")
+    else:
+        model.notes.append(
+            "atlas: none — UVs computed against a 1x1 page (pass --atlas)"
+        )
 
     # ---- bones: mirror to Godot space, solving effective locals for inherit
     bone_relative_path = {}
@@ -315,9 +321,11 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     # rig lands in its setup pose. See src/constraints.py.
     from . import constraints
     bone_relative = bone_relative_path
+    baked_bones = set()
     for anim_name, animation in spine["animations"].items():
         bones = dict(animation.get("bones", {}))
         baked = constraints.bake_animation(spine, anim_name, skin=skin)
+        baked_bones.update(baked)
         for bone_name, channels in baked.items():
             bones[bone_name] = channels
         tracks = {}
@@ -338,5 +346,32 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                     for k in props["translate"]
                 ]
         model.animations[anim_name] = tracks
+
+    # Report what the conversion could and could not carry, so the CLI can say
+    # it out loud instead of leaving the user to guess from the output file.
+    ik = spine.get("ik") or []
+    path = spine.get("path") or []
+    if ik or path:
+        skin_name = skin or (spine.get("skins") or [{}])[0].get("name", "?")
+        probe = constraints.ConstraintSolver(spine, skin=skin)
+        active = [c["name"] for c in ik + path if probe._is_active(c)]
+        model.notes.append(
+            f"constraints baked (skin {skin_name!r}): "
+            + (", ".join(active) if active else "none active")
+        )
+        if len(active) < len(ik) + len(path):
+            model.notes.append(
+                f"constraints skipped: {len(ik) + len(path) - len(active)} "
+                "not active under this skin"
+            )
+    unsupported = constraints.unsupported_constraints(spine)
+    if unsupported:
+        kinds = sorted({kind for kind, _ in unsupported})
+        model.notes.append(
+            "not converted: " + ", ".join(kinds)
+            + f" ({len(unsupported)} total) — bake them in Spine first"
+        )
+    if baked_bones:
+        model.notes.append(f"baked bones: {len(baked_bones)}")
 
     return model
