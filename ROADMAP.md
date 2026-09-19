@@ -11,8 +11,25 @@
 - [x] Atlas page size read from PNG IHDR
 - [x] Bezier curves baked into the runtime's 10-point table
 - [x] CLI with `--from` / `--to` format dispatch
+- [x] Output as a self-contained bundle (`-o <dir> --name <stem>`): json +
+      atlas + texture + a browser viewer, or a `.tscn` + texture
+- [x] Browser viewer for Spine output (`view` command, `index.html`, autoplay)
+- [x] Generated scenes load in the real engine (root node, sanitized resource
+      ids, resolved texture, working animation tracks)
+- [x] Import test in Spine Editor — verified with the 4.3.26 Trial: the JSON
+      imports and the rig renders. Images need a one-time `Tree → Images → Path`
+      step per project (Editor design, not a converter bug), and the Trial's
+      `-i -o -r` CLI opens the GUI without writing a `.spine` file.
 
 ## Planned
+
+### Known gaps
+
+- [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate` are
+      read), so rigs that animate scale deviate from the source
+- [ ] Spine constraints (IK, path, physics) are not converted, so the bones
+      they drive (e.g. `chain1..8` under a path constraint, `shin*` under leg
+      IK) deviate by design — see the tolerance rule in `AGENTS.md`
 
 ### Godot side
 
@@ -22,8 +39,6 @@
 
 ### Spine side
 
-- [ ] Constraints (IK, transform, path) — Godot side has no equivalent, but the
-      reverse direction could map Spine constraints to `SkeletonModification2D`
 - [ ] Sequences support
 - [ ] `noScale` / `noScaleOrReflection` inherit modes (currently fall back to
       normal inheritance)
@@ -43,5 +58,5 @@
 
 - [ ] Godot editor plugin (right-click `.tscn` → export to Spine)
 - [ ] PyPI package (`pip install skeleton-converter`)
-- [ ] CI: GitHub Actions running round-trip tests on a matrix of Python versions
-- [ ] Import test in Spine Editor (the single most important untested claim)
+- [x] CI: GitHub Actions running the fixture-free suite on Python 3.10-3.13
+      (`.github/workflows/tests.yml`)

@@ -21,8 +21,9 @@ python3 -m src.cli convert --to spine path/to/player.tscn -o out --name animatio
 # Spine JSON -> Godot scene (out/animation.tscn + the page image)
 python3 -m src.cli convert --to godot path/to/hero.json -o out --name animation
 
-# Numeric diff between a Godot scene and a Spine JSON
-python3 -m src.cli compare rig.tscn out.json
+# Numeric diff between two files of the same format
+python3 -m src.cli compare --format godot rig_a.tscn rig_b.tscn
+python3 -m src.cli compare --format spine a.json b.json
 ```
 
 Requires: `python3` (3.10+, zero dependencies), `node`, and the Godot 4 binary

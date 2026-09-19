@@ -78,6 +78,27 @@ The `spine-webgl` version is pinned to the 4.2 line in `src/viewer_out.py`. Do
 not bump it to 4.3: the shell drives the `SpineCanvas` app API, which 4.3
 removed, and a 4.3 runtime loads the skeleton without error and renders nothing.
 
+## Tests
+
+```bash
+python3 -m pip install pytest
+python3 -m pytest tests/ -v
+```
+
+Two tiers:
+
+- **Fixture-free** (`test_generated_output.py`) — builds a minimal rig in
+  process and asserts what the engines require: the scene root exists, every
+  track path resolves, resource ids are valid, the atlas names its image, and
+  transforms survive our own reader. Runs everywhere, including CI.
+- **Round-trip** (`test_roundtrip_godot.py`, `test_cross_convert.py`) — needs
+  `tests/fixtures/player.tscn`, which is **not committed** (it is a
+  third-party asset). Without it those tests skip, so a public clone has no
+  third-party files and a green suite still means something.
+
+CI runs the fixture-free tier on Python 3.10–3.13
+(`.github/workflows/tests.yml`).
+
 ## The coordinate contract
 
 Getting this wrong is the entire risk of skeletal conversion. These are the
