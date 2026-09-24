@@ -291,8 +291,25 @@ In the official `hero` sample, `left-leg`/`right-leg` drive `thigh*`/`shin*`,
 exactly the bones that diverge (up to 226 units). Bones outside those chains
 still differ by ~0.1–0.4, which is a real gap: Spine `scale` animation tracks
 are dropped (see ROADMAP), and `inherit: noRotationOrReflection` is emulated.
-Report which bones fail and why, rather than calling the whole conversion
-wrong or widening the tolerance.
+### Rule: each interpolation format keeps its own value space
+
+Bezier control points live in the raw JSON's **offset space** (the values a
+Spine key carries), not in Godot's absolute track values. Every leg maps
+through its own affine transform, and the inverse is not the same map:
+
+- rotate: godot = -(setup_spine + offset) ⇒ offset = -angle + rotation_deg
+- translate x: godot = offset + setup_x ⇒ offset = v - position[0]
+- translate y: godot = -(offset + setup_y) ⇒ offset = position[1] - v
+
+Getting the sign right by reasoning alone failed twice; what settled it was
+sampling both engines (`bezier_track_interpolate` in Godot, the official
+runtime on the same rig) and matching numbers. Two semantics landmines:
+translate curves carry 8 floats ([x1,y1,x2,y2] per segment — slice per axis,
+never `curve[:4]` for y), and spine-core evaluates a curve as 9 pre-sampled
+linear segments while Godot solves the cubic exactly, so ≤0.13° difference
+between engines on a hard curve is inherent to the runtimes. When two layers
+disagree about which axis a merged translate curve half belongs to
+(`_merge_axis`), the fix is bookkeeping, not math.
 
 ## Docs maintenance
 

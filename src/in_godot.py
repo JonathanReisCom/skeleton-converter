@@ -104,9 +104,13 @@ def parse_value(raw: str):
 
 
 def parse_animation_keys(raw: str) -> dict:
-    """Godot 4 Animation ``keys`` dict -> {times, transitions, update, values}."""
+    """Godot 4 Animation ``keys`` dict -> {times, transitions, update, values}.
+
+    Bezier tracks carry ``points`` (per key: value, in_t, in_v, out_t, out_v)
+    and ``handle_modes`` instead of ``values``.
+    """
     out = {}
-    for key in ("times", "transitions", "update"):
+    for key in ("times", "transitions", "update", "points"):
         match = re.search(r'"%s":\s*' % key, raw)
         if not match:
             continue
@@ -231,11 +235,12 @@ def parse_polygon_weights(raw) -> list:
     return out
 
 
-def read_godot_animation(animation: dict, prefix: str) -> dict:
+def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = None) -> dict:
     props = animation["props"]
     tracks = {}
     index = 0
     while f"tracks/{index}/type" in props:
+        track_type = str(props.get(f"tracks/{index}/type", "value"))
         path = props.get(f"tracks/{index}/path", "")
         keys = props.get(f"tracks/{index}/keys") or {}
         node_path_value, _, property_name = str(path).partition(":")
@@ -245,10 +250,21 @@ def read_godot_animation(animation: dict, prefix: str) -> dict:
         )
         times = keys.get("times", [])
         values = keys.get("values", [])
-        if bone_name and property_name == "rotation_degrees":
+        if bone_name and property_name == "rotation_degrees" and track_type == "bezier":
+            tracks.setdefault(bone_name, {})["rotate"] = _bezier_keys(
+                times, keys.get("points", []), model, bone_name, "rotate")
+        elif bone_name and property_name == "rotation_degrees":
             tracks.setdefault(bone_name, {})["rotate"] = [
                 {"time": float(t), "angle": float(v)} for t, v in zip(times, values)
             ]
+        elif bone_name and property_name.startswith("position") and track_type == "bezier":
+            axis = "x" if property_name.endswith(":x") else "y"
+            axis_keys = _bezier_keys(
+                times, keys.get("points", []), model, bone_name, "translate",
+                axis=axis)
+            existing = tracks.get(bone_name, {}).get("translate")
+            tracks.setdefault(bone_name, {})["translate"] = _merge_axis(
+                existing, axis_keys, axis)
         elif bone_name and property_name == "position":
             tracks.setdefault(bone_name, {})["translate"] = [
                 {"time": float(t), "x": float(v[0]), "y": float(v[1])}
@@ -256,6 +272,82 @@ def read_godot_animation(animation: dict, prefix: str) -> dict:
             ]
         index += 1
     return tracks
+
+
+def _spine_inverse(kind: str, axis: str | None, bone: Skeleton):
+    """Godot track value -> spine offset: the inverse of each writer's affine
+    map. Curve control points live in the offset space of the raw JSON values,
+    which is what every writer maps through."""
+    if kind == "rotate":
+        # godot = rotation_deg - offset  (angle = -(setup_spine + offset))
+        return lambda v: bone.rotation_deg - v
+    if axis == "x":
+        # godot = offset + setup_x
+        return lambda v: v - bone.position[0]
+    # godot = -(offset + setup_y) = -offset + position[1]
+    return lambda v: bone.position[1] - v
+
+
+def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
+    """Bezier track points -> key dicts with a spine-space ``curve`` per key.
+
+    Godot points per key: [value, in_t, in_v, out_t, out_v], handles as
+    offsets from the key. The curve segment key i -> i+1 lives on key i:
+    [t0 + out_t, spine(t0), t1 + in_t, spine_v1] with the value controls
+    mapped back through the writer's affine transform (Godot -> spine).
+    """
+    bone = model.by_name.get(bone_name) if model else None
+    to_spine = _spine_inverse("rotate" if kind == "rotate" else "translate",
+                              axis, bone) if bone else (lambda v: v)
+    n = len(times)
+    values = [points[i * 5] for i in range(n)]
+    in_h = [(points[i * 5 + 1], points[i * 5 + 2]) for i in range(n)]
+    out_h = [(points[i * 5 + 3], points[i * 5 + 4]) for i in range(n)]
+    keys = []
+    for i in range(n):
+        key = {"time": float(times[i]),
+               "angle" if kind == "rotate" else axis: float(values[i])}
+        if i < n - 1:
+            cx1 = times[i] + out_h[i][0]
+            cy1 = to_spine(values[i] + out_h[i][1])
+            cx2 = times[i + 1] + in_h[i + 1][0]
+            cy2 = to_spine(values[i + 1] + in_h[i + 1][1])
+            key["curve"] = [cx1, cy1, cx2, cy2]
+        keys.append(key)
+    return keys
+
+
+def _merge_axis(existing: list | None, axis_keys: list, axis: str) -> list:
+    """Merge one bezier axis into the combined translate channel.
+
+    The other axis may come from a linear value track (no curve) or a second
+    bezier track; linear keys get straight control points so the spine 8-tuple
+    stays dense (readCurve indexes curve[value << 2]).
+    """
+    if existing is None:
+        return axis_keys
+    out = []
+    for i, (k0, k1) in enumerate(zip(existing, axis_keys)):
+        merged = dict(k0)
+        merged[axis] = k1[axis]
+        # ``existing`` holds whichever axis arrived first; the current axis's
+        # curve lives on k1, the other axis's on k0. Curve layout is
+        # [x1, y1, x2, y2] (readCurve indexes value<<2), so x first, y second.
+        x_key, y_key = (k1, k0) if axis == "x" else (k0, k1)
+        curve_x = x_key.get("curve") or []
+        curve_y = y_key.get("curve") or []
+        # A straight fallback for the axis without its own bezier track:
+        # controls 1/3 and 2/3 along the straight line between its key values.
+        other = "y" if axis == "x" else "x"
+        if i + 1 < len(existing):
+            v0, v1 = existing[i][other], existing[i + 1][other]
+        else:
+            v0 = v1 = k0.get(other, 0.0)
+        dt = k1["time"] - k0["time"]
+        straight = [k0["time"] + dt / 3.0, v0, k1["time"] - dt / 3.0, v1]
+        merged["curve"] = list(curve_x or straight) + list(curve_y or straight)
+        out.append(merged)
+    return out
 
 
 def read_godot_skeleton(tscn_path: str) -> Skeleton:
@@ -331,5 +423,6 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
             match = re.match(r'SubResource\("([^"]+)"\)', str(reference))
             animation = scene["sub_resources"].get(match.group(1)) if match else None
             if animation and animation["type"] == "Animation":
-                model.animations[anim_name] = read_godot_animation(animation, prefix)
+                model.animations[anim_name] = read_godot_animation(
+                    animation, prefix, model)
     return model

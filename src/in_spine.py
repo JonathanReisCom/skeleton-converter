@@ -300,6 +300,11 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                     )))
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
+            # Record the host so the polygon carries its slot's bone through
+            # Godot and back: an empty weights list makes the Godot writer bind
+            # the polygon to the root bone, and the round trip then re-emits
+            # the slot on the wrong bone.
+            weights_by_bone[host] = {i: 1.0 for i in range(len(world_points))}
 
         model.attachments.append({
             "name": slot_name.lower(),
@@ -335,14 +340,19 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             setup_pos = (setup.get("x", 0.0), setup.get("y", 0.0))
             if props.get("rotate"):
                 tracks.setdefault(bone_name, {})["rotate"] = [
-                    {"time": k.get("time", 0.0), "angle": -(setup_rot + k.get("value", 0.0))}
+                    {"time": k.get("time", 0.0), "angle": -(setup_rot + k.get("value", 0.0)),
+                     # Curve stays in spine space (absolute time/value control
+                     # points, per CurveTimeline.setBezier). Each writer maps
+                     # it to its own interpolation; see out_godot.
+                     **({"curve": k["curve"]} if k.get("curve") is not None else {})}
                     for k in props["rotate"]
                 ]
             if props.get("translate"):
                 tracks.setdefault(bone_name, {})["translate"] = [
                     {"time": k.get("time", 0.0),
                      "x": setup_pos[0] + k.get("x", 0.0),
-                     "y": -(setup_pos[1] + k.get("y", 0.0))}
+                     "y": -(setup_pos[1] + k.get("y", 0.0)),
+                     **({"curve": k["curve"]} if k.get("curve") is not None else {})}
                     for k in props["translate"]
                 ]
         model.animations[anim_name] = tracks

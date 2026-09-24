@@ -195,6 +195,49 @@ def _emit_attachments(model, world, texture_path):
 # ---------------------------------------------------------------------------
 
 
+def _segment_handles(curve, time0: float, time1: float,
+                     value0: float, value1: float, mirror: bool) -> tuple:
+    """One spine segment -> Godot (out-handle, in-handle) value offsets.
+
+    Spine control points are absolute time/value (CurveTimeline.setBezier);
+    Godot handles are offsets from their key's time and value. ``mirror``
+    flips the value axis (rotation and Y negate between the spaces), so a
+    handle's value offset is negated with it.
+    """
+    dt = time1 - time0
+    sign = -1.0 if mirror else 1.0
+    if curve == "stepped":
+        return (dt / 3.0, 0.0), (-dt / 3.0, 0.0)
+    if isinstance(curve, (list, tuple)):
+        cx1, cy1, cx2, cy2 = (float(c) for c in curve[:4])
+        return ((cx1 - time0, sign * (cy1 - value0)),
+                (cx2 - time1, sign * (cy2 - value1)))
+    # Linear: a straight segment is its own handle pair.
+    dv = (value1 - value0) * sign
+    return (dt / 3.0, dv / 3.0), (-dt / 3.0, -dv / 3.0)
+
+
+def _solve_handles(keys, times, spine_values, mirror: bool, axis: int = 0) -> tuple:
+    """Godot out/in handle offsets for one axis track, in Godot value space.
+
+    Translate curves carry 8 floats ([x1,y1,x2,y2] per segment); rotate uses
+    4. ``axis`` selects which half a translate track reads.
+    """
+    n = len(keys)
+    out_h = [(0.0, 0.0)] * n
+    in_h = [(0.0, 0.0)] * n
+    for i in range(n - 1):
+        curve = keys[i].get("curve")
+        if isinstance(curve, (list, tuple)) and len(curve) >= 8:
+            curve = curve[axis * 4:(axis + 1) * 4]
+        out, inn = _segment_handles(
+            curve, times[i], times[i + 1],
+            spine_values[i], spine_values[i + 1], mirror)
+        out_h[i] = out
+        in_h[i + 1] = inn
+    return out_h, in_h
+
+
 def _resource_id(anim_name: str) -> str:
     """Godot sub_resource ids accept only letters, digits, and underscores.
 
@@ -221,41 +264,93 @@ def _emit_animations(model):
             if bone is None:
                 continue
             bone_relative = bone.path
+            setup_rot = bone.rotation_deg
+            setup_pos = bone.position
             if props.get("rotate"):
-                keys = [(k["time"], k["angle"]) for k in props["rotate"]]
-                track_path = f"Sprite2D/Skeleton2D/{bone_relative}:rotation_degrees"
-                tracks.append(("rotation_degrees", keys, track_path))
+                keys = props["rotate"]
+                base = f"Sprite2D/Skeleton2D/{bone_relative}"
+                if any(k.get("curve") for k in keys):
+                    # Handle computation needs the key's value in spine offset
+                    # space (where CurveTimeline control points live):
+                    # angle = -(setup_spine + offset) and rotation_deg =
+                    # -setup_spine, so offset = -angle + rotation_deg.
+                    spine_values = [-k["angle"] + setup_rot for k in keys]
+                    times = [k["time"] for k in keys]
+                    out_h, in_h = _solve_handles(keys, times, spine_values, True)
+                    tracks.append(("bezier", f"{base}:rotation_degrees",
+                                   times, [k["angle"] for k in keys],
+                                   out_h, in_h))
+                else:
+                    tracks.append(("value", f"{base}:rotation_degrees",
+                                   [(k["time"], k["angle"]) for k in keys]))
             if props.get("translate"):
-                keys = [(k["time"], (k["x"], k["y"])) for k in props["translate"]]
-                track_path = f"Sprite2D/Skeleton2D/{bone_relative}:position"
-                tracks.append(("position", keys, track_path))
+                keys = props["translate"]
+                base = f"Sprite2D/Skeleton2D/{bone_relative}:position"
+                if any(k.get("curve") for k in keys):
+                    # x: spine = kx - setup_x; y mirrors: spine = -ky - setup_y.
+                    # x: godot = spine + setup_x; y mirrors, so offset_y =
+                    # -ky - setup_y_spine = -ky + position[1].
+                    for axis, to_spine in (
+                            (0, lambda k: k["x"] - setup_pos[0]),
+                            (1, lambda k: -k["y"] + setup_pos[1])):
+                        spine_values = [to_spine(k) for k in keys]
+                        times = [k["time"] for k in keys]
+                        out_h, in_h = _solve_handles(keys, times, spine_values,
+                                                     axis == 1, axis=axis)
+                        tracks.append(("bezier", f"{base}:{'xy'[axis]}",
+                                       times, [k["x" if axis == 0 else "y"] for k in keys],
+                                       out_h, in_h))
+                else:
+                    tracks.append(("value", base,
+                                   [(k["time"], (k["x"], k["y"])) for k in keys]))
         lines = [f'[sub_resource type="Animation" id="{resource_id}"]']
         length = 0.0
-        for _kind, keys, _path in tracks:
-            for time, _ in keys:
-                length = max(length, time)
+        for track in tracks:
+            times = track[2] if track[0] == "bezier" else [t for t, _ in track[2]]
+            length = max(length, max(times))
         lines.append(f"length = {round(length, 6)}")
         lines.append("loop_mode = 1")
-        for track_index, (property_name, keys, track_path) in enumerate(tracks):
-            times = ", ".join(str(time) for time, _ in keys)
-            transitions = ", ".join("1" for _ in keys)
-            if property_name == "rotation_degrees":
-                values = ", ".join(str(round(v, 6)) for _, v in keys)
+
+        for track_index, track in enumerate(tracks):
+            if track[0] == "bezier":
+                _path, times, values, out_h, in_h = track[1:]
+                points = []
+                for i in range(len(times)):
+                    points.append(round(values[i], 6))
+                    points += [round(in_h[i][0], 6), round(in_h[i][1], 6),
+                               round(out_h[i][0], 6), round(out_h[i][1], 6)]
+                lines.append(f'tracks/{track_index}/type = "bezier"')
+                lines.append(f"tracks/{track_index}/imported = false")
+                lines.append(f"tracks/{track_index}/enabled = true")
+                lines.append(f'tracks/{track_index}/path = NodePath("{_path}")')
+                lines.append(f"tracks/{track_index}/interp = 1")
+                lines.append(f"tracks/{track_index}/loop_wrap = true")
+                lines.append(
+                    'tracks/%d/keys = {\n"handle_modes": PackedInt32Array(%s),\n'
+                    '"points": PackedFloat32Array(%s),\n'
+                    '"times": PackedFloat32Array(%s)\n}' % (
+                        track_index, ", ".join("0" for _ in times),
+                        ", ".join(str(p) for p in points),
+                        ", ".join(str(t) for t in times)))
             else:
-                values = ", ".join(
-                    f"Vector2({round(v[0], 6)}, {round(v[1], 6)})" for _, v in keys
-                )
-            lines.append(f'tracks/{track_index}/type = "value"')
-            lines.append(f"tracks/{track_index}/imported = false")
-            lines.append(f"tracks/{track_index}/enabled = true")
-            lines.append(f'tracks/{track_index}/path = NodePath("{track_path}")')
-            lines.append(f"tracks/{track_index}/interp = 1")
-            lines.append(f"tracks/{track_index}/loop_wrap = true")
-            lines.append(
-                'tracks/%d/keys = {\n"times": PackedFloat32Array(%s),\n'
-                '"transitions": PackedFloat32Array(%s),\n"update": 0,\n'
-                '"values": [%s]\n}' % (track_index, times, transitions, values)
-            )
+                _, _path, keys = track
+                times = ", ".join(str(t) for t, _ in keys)
+                if _path.endswith("rotation_degrees"):
+                    values = ", ".join(str(round(v, 6)) for _, v in keys)
+                else:
+                    values = ", ".join(
+                        f"Vector2({round(v[0], 6)}, {round(v[1], 6)})" for _, v in keys)
+                lines.append(f'tracks/{track_index}/type = "value"')
+                lines.append(f"tracks/{track_index}/imported = false")
+                lines.append(f"tracks/{track_index}/enabled = true")
+                lines.append(f'tracks/{track_index}/path = NodePath("{_path}")')
+                lines.append(f"tracks/{track_index}/interp = 1")
+                lines.append(f"tracks/{track_index}/loop_wrap = true")
+                lines.append(
+                    'tracks/%d/keys = {\n"times": PackedFloat32Array(%s),\n'
+                    '"transitions": PackedFloat32Array(%s),\n"update": 0,\n'
+                    '"values": [%s]\n}' % (track_index, times,
+                                           ", ".join("1" for _ in keys), values))
         animation_resources.append({
             "id": resource_id, "lines": lines, "name": anim_name,
         })

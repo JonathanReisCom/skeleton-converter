@@ -36,6 +36,25 @@
 - [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
       bone along a chain (~0.42 after four), independent of constraints. It
       predates the constraint work and is the largest remaining error source
+- [x] ~~Bezier curves do not survive the Godot leg~~ — FIXED: `out_godot`
+      emits `TYPE_BEZIER` tracks (points = [value, in_t, in_v, out_t, out_v]
+      per key, handles offset from their key) and `in_godot` rebuilds the
+      spine-space curve. All 97 curve segments of the hero round-trip
+      verbatim (worst delta 0.0). Note: spine-core evaluates the curve as 9
+      linear segments (`setBezier` pre-samples), Godot solves the cubic
+      exactly — a ≤0.13° difference between engines on a hard curve is
+      inherent to the runtimes, not a conversion error
+- [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate`
+      are read). Measured victim on the hero: `head-turn` flips the head with
+      a `stepped` scale key (x=-1) — the flip never reaches the converted rig
+      and its children mirror to the wrong side (hair01 worldY sign flip,
+      122-unit deviation). Rigs that animate scale deviate
+- [ ] A `skin: true` path constraint does not survive the round trip. Under a
+      skin that does not equip it, the source runtime leaves the constraint's
+      bones inactive at (0,0); the converted rig drops the constraint, so those
+      bones stay active at their setup/animated transforms (measured: hero
+      morningstar chain 150–300 units in all 12 animations). Same root cause as
+      the bake: Godot has no path-constraint equivalent
 
 ### Godot side
 

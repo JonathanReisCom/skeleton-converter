@@ -42,11 +42,18 @@ def resolve_texture_path(texture_path: str, scene_path: str) -> str | None:
     if not texture_path:
         return None
     if texture_path.startswith("res://"):
-        project_root = Path(scene_path).resolve().parent
-        for candidate in [project_root, *project_root.parents]:
+        rel = texture_path[len("res://"):]
+        scene_dir = Path(scene_path).resolve().parent
+        # Two roots are plausible: a real Godot project (project.godot marks
+        # it), or a conversion output folder, where the scene's own directory
+        # is the project and the texture was copied beside the scene.
+        for candidate in [scene_dir, *scene_dir.parents]:
             if (candidate / "project.godot").exists():
-                return str(candidate / texture_path[len("res://"):])
-        return None
+                resolved = candidate / rel
+                if resolved.exists():
+                    return str(resolved)
+        resolved = scene_dir / Path(rel).name
+        return str(resolved) if resolved.exists() else None
     return texture_path
 
 
@@ -348,7 +355,8 @@ def write_spine_json(model: Skeleton, output_path: str,
             if props.get("rotate"):
                 setup_rotation = bone.rotation_deg if bone else 0.0
                 bone_tracks["rotate"] = [
-                    {"time": round(k["time"], 6), "value": round(-(k["angle"] - setup_rotation), 6)}
+                    {"time": round(k["time"], 6), "value": round(-(k["angle"] - setup_rotation), 6),
+                     **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {})}
                     for k in props["rotate"]
                 ]
             if props.get("translate"):
@@ -358,6 +366,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                         "time": round(k["time"], 6),
                         "x": round(k["x"] - setup_position[0], 6),
                         "y": round(-(k["y"] - setup_position[1]), 6),
+                        **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {}),
                     }
                     for k in props["translate"]
                 ]
