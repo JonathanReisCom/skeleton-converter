@@ -18,6 +18,8 @@
 
 PYTHON ?= python3
 PORT   ?= 8642
+# True when the port is already bound by another process.
+PORT_BUSY = $(PYTHON) -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', $(1))); print('yes') if s else None" 2>/dev/null || echo yes
 NAME   ?= animation
 
 # Per-direction ports: a local.mk can separate them (GODOT_PORT/SPINE_PORT)
@@ -48,7 +50,11 @@ godot-to-spine:
 	@$(PYTHON) -m src.cli convert --from godot --to spine \
 	  "$(GODOT_INPUT)" -o "$(GODOT_OUT)" --name "$(NAME)"
 	@echo "--> serving the Spine viewer on http://localhost:$(GODOT_PORT)/  (Ctrl+C stops)"
-	@$(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"
+	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
+	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
+	else \
+	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"; \
+	fi
 
 # Spine JSON -> .tscn + the page image, then serve the Godot web preview. The
 # browser renders the real .tscn through the real engine (WASM export).
@@ -69,7 +75,11 @@ spine-to-godot:
 	  echo "error: web preview was not built (is Godot installed? see GODOT_BIN)"; \
 	  exit 1; }
 	@echo "--> serving the Godot web preview on http://localhost:$(SPINE_PORT)/  (Ctrl+C stops)"
-	@$(PYTHON) -m http.server $(SPINE_PORT) --directory "$(SPINE_OUT)"
+	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(SPINE_PORT))) == 0 else 1)'; then \
+	  echo "--> port $(SPINE_PORT) already in use — a previous server is probably still up; open the URL above"; \
+	else \
+	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(SPINE_OUT)"; \
+	fi
 
 # Pack an existing Godot scene (.tscn) and run it in the browser: the real
 # engine (WASM) loads output/<name>.tscn and its referenced resources
@@ -92,7 +102,11 @@ godot-preview:
 	@$(PYTHON) -c "from src.godot_preview import preview_scene; \
 preview_scene('$(GODOT_INPUT)', '$(GODOT_OUT)', '$(NAME)')"
 	@echo "--> serving on http://localhost:$(GODOT_PORT)/  (Ctrl+C stops)"
-	@$(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"
+	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
+	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
+	else \
+	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"; \
+	fi
 
 test:
 	$(PYTHON) -m pytest tests/ -v
