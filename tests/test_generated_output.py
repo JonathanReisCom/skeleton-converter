@@ -162,3 +162,38 @@ def test_bezier_curves_survive_the_godot_leg(tmp_path):
     # offsets: x came back minus setup (10.0), y negated back to 0
     assert math.isclose(back["translate"][0]["x"], 0.0, abs_tol=1e-6)
     assert math.isclose(back["translate"][0]["y"], 0.0, abs_tol=1e-6)
+
+
+def test_skinned_polygon_format_matches_what_godot_renders(tmp_path):
+    """The .tscn has two silent render-killers; assert the writer avoids both.
+
+    A skinned Polygon2D with a wrong bone reference or a merged triangle list
+    renders NOTHING — no error, an invisible mesh. Both details were found by
+    exporting the hero and diffing screenshots:
+    - bone refs are NodePaths relative to the Skeleton2D ("root/hip/..."),
+      like the official demo's "Hip/Chest", not bare leaf names;
+    - each spine triangle is its own `polygons` group, because Godot
+      fan-triangulates a group from its first index.
+    """
+    model = _rig()
+    # Weighted mesh: 4 verts, one influencing bone with weight 1.
+    model.attachments.append({
+        "name": "plate",
+        "polygon": [(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)],
+        "uv": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+        "polygons": [0, 1, 2, 0, 2, 3],
+        "weights": [("arm", [1.0, 1.0, 1.0, 1.0])],
+        "position": (0.0, 0.0),
+        "offset": (0.0, 0.0),
+        "internal_vertices": 0,
+    })
+    scene = tmp_path / "rig.tscn"
+    write_godot_scene(model, str(scene), texture_path="res://rig.png")
+    text = scene.read_text()
+
+    # Bone refs are skeleton-relative paths, resolvable from the skeleton node.
+    assert '"root/arm", PackedFloat32Array(1.0, 1.0, 1.0, 1.0)' in text, \
+        "bone reference must be the skeleton-relative path"
+    # One group per triangle (2 triangles from the 6 flat indices).
+    groups = re.findall(r'PackedInt32Array\((\d+), (\d+), (\d+)\)', text)
+    assert groups == [("0", "1", "2"), ("0", "2", "3")], groups

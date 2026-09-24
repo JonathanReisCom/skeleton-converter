@@ -291,6 +291,43 @@ In the official `hero` sample, `left-leg`/`right-leg` drive `thigh*`/`shin*`,
 exactly the bones that diverge (up to 226 units). Bones outside those chains
 still differ by ~0.1–0.4, which is a real gap: Spine `scale` animation tracks
 are dropped (see ROADMAP), and `inherit: noRotationOrReflection` is emulated.
+
+### Rule: the web preview animates, it does not play
+
+The wrapper boot silences the scene's AnimationTree (`tree.active = false`)
+and freezes the root's physics/processing (`set_physics_process(false)`,
+`set_process(false)`). The AnimationTree of a native editor scene overrides
+whatever the AnimationPlayer plays, and gameplay scripts (the Godot demo's
+`player.gd`) apply gravity every frame — the character walked out of the
+camera in seconds and the canvas looked like a render failure. The preview
+owns the pose through the track panel; it is not a level runtime. Scripts are
+still copied and their node behavior preserved — only the per-frame gameplay
+loop is frozen.
+
+### Rule: the Godot .tscn format has silent render-killers
+
+Three format details make a skinned Polygon2D render *nothing* — no error,
+just an invisible mesh (the hero preview was gray for hours because of these):
+
+1. **Bone references in `bones = [...]` are NodePaths relative to the
+   Skeleton2D the polygon is skinned to** — the official demo writes
+   `"Hip/Chest"`, never a bare leaf name and never `../../Skeleton2D/Hip`.
+   A wrong path resolves to nothing and Godot silently skips the polygon.
+2. **`polygons` groups are polygons, not triangles.** Godot fan-triangulates
+   each `PackedInt32Array` group from its first index; spine's flat
+   `triangles` array must be emitted as one 3-index group per triangle. A
+   192-index single group is a 192-gon whose triangulation degenerates.
+3. **A weighted mesh may carry no `bones` key** (Spine 4.2): the vertex array
+   is still `[boneCount, (idx, x, y, w)...]`. Detect weighted by density
+   (`len(uvs)/2 != len(vertices)/2`), not by the key's presence — the hero's
+   cape is 621 floats that decode to 45 weighted vertices, not 310 pairs.
+
+Isolate render bugs by substitution, not by staring: replace the suspect
+mesh's data with a known-good quad in the boot script and re-export. Each
+isolation step here (node ✓, texture ✓, data ✗ → polygons ✗ → bones ✗ →
+path semantics ✓) took one export; reasoning about the renderer guessed
+wrong twice.
+
 ### Rule: each interpolation format keeps its own value space
 
 Bezier control points live in the raw JSON's **offset space** (the values a

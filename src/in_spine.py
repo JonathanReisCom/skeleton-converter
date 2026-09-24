@@ -257,8 +257,15 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             else:
                 uv_points = [[0, 0], [width, 0], [width, height], [0, height]]
             weights_by_bone[host] = {i: 1.0 for i in range(4)}
-        elif bones:
-            # Weighted mesh: Spine stores [boneCount, (boneIdx, localX, localY, w)...]
+        elif bones or (vertices and isinstance(vertices[0], (int, float))
+                       and int(vertices[0]) >= 1 and len(uvs) // 2 != len(vertices) // 2):
+            # Weighted mesh. Spine 4.2 writes the `bones` key only when the
+            # attachment defines its own weight list; a mesh without it still
+            # carries weighted vertices ([boneCount, (idx, x, y, w)...]) — the
+            # hero's cape is 621 floats that decode to 45 weighted vertices,
+            # not 310 unweighted pairs. Distinguish by density: weighted
+            # entries consume >= 5 floats per vertex, so vertex counts don't
+            # match len(vertices)/2.
             cursor = 0
             vertex_count = 0
             while cursor < len(vertices):

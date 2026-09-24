@@ -156,8 +156,18 @@ def _emit_attachments(model, world, texture_path):
         if att.get("polygons"):
             groups = att["polygons"]
             if groups and isinstance(groups[0], int):
-                # flat triangle index list: emit as one PackedInt32Array
-                props.append("polygons = [PackedInt32Array(%s)]" % ", ".join(str(i) for i in groups))
+                # Flat triangle index list (spine `triangles`): emit ONE GROUP
+                # PER TRIANGLE. Godot fan-triangulates each PackedInt32Array as
+                # a single polygon — 192 indices in one group is a 192-gon whose
+                # triangulation degenerates and the mesh silently draws nothing
+                # (the hero's cape). A 3-index group IS a triangle.
+                props.append(
+                    "polygons = [%s]" % ", ".join(
+                        "PackedInt32Array(%d, %d, %d)"
+                        % (groups[i], groups[i + 1], groups[i + 2])
+                        for i in range(0, len(groups) - 2, 3)
+                    )
+                )
             else:
                 props.append(
                     "polygons = [%s]" % ", ".join(
@@ -171,9 +181,17 @@ def _emit_attachments(model, world, texture_path):
                 weights_array = [
                     round(w, 6) for w in vertex_weights
                 ]
+                # The tscn bone reference is a NodePath relative to the
+                # Skeleton2D the polygon is skinned to — the official demo
+                # writes "Hip/Chest", never "../../Skeleton2D/Hip". A bare
+                # leaf name does not resolve and Godot silently skips the
+                # skinned polygon (the hero rendered nothing until this was
+                # the skeleton-relative path).
+                bone = model.by_name.get(bone_name)
+                bone_path = bone.path if bone else bone_name
                 parts.append(
                     '"%s", PackedFloat32Array(%s)'
-                    % (bone_name, ", ".join(str(w) for w in weights_array))
+                    % (bone_path, ", ".join(str(w) for w in weights_array))
                 )
             props.append("bones = [%s]" % ", ".join(parts))
         else:

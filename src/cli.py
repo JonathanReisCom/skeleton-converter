@@ -59,15 +59,25 @@ def convert(args: argparse.Namespace) -> int:
         image_name = name + Path(image_path).suffix if image_path else "image.png"
         out_spine.write_spine_json(model, str(output), image_name=image_name,
                                    image_path=image_path)
-        # Complete handoff: texture beside the JSON (the atlas names it) and a
-        # reusable viewer shell, so the output folder is immediately servable.
+        # Complete handoff: texture beside the JSON (the atlas names it).
         if image_path and Path(image_path) != out_dir / image_name:
             shutil.copy2(image_path, out_dir / image_name)
+        # Browser preview: index.html at the output root, the bundle in
+        # output/ — the shell fetches "output/<name>.json" with plain paths
+        # (no ../), so any static server pointed at the output root works.
+        bundle_dir = out_dir / "output"
+        bundle_dir.mkdir(exist_ok=True)
+        shutil.move(str(output), bundle_dir / output.name)
+        shutil.move(str(output.with_suffix(".atlas")), bundle_dir / output.with_suffix(".atlas").name)
+        shutil.move(str(out_dir / image_name), bundle_dir / image_name)
         from . import viewer_out
+        moved_json = bundle_dir / output.name
         viewer_out.emit_viewer(str(out_dir / "index.html"),
-                               skeleton_json_path=str(output))
-        _step(f"wrote {output.name}, {output.with_suffix('.atlas').name}, "
-              f"{image_name}, index.html")
+                               skeleton_json_path=str(moved_json),
+                               skeleton_url=f"output/{output.name}",
+                               atlas_url=f"output/{output.with_suffix('.atlas').name}")
+        _step(f"wrote index.html + output/{output.name}, "
+              f"output/{output.with_suffix('.atlas').name}, output/{image_name}")
         _step(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
               f"{len(model.animations)} animations")
         _step("preview: python3 -m http.server --directory "
@@ -93,15 +103,35 @@ def convert(args: argparse.Namespace) -> int:
             dest = out_dir / (name + Path(image).suffix)
             if Path(image).resolve() != dest.resolve():
                 shutil.copy2(image, dest)
-        wrote = output.name
+        # Artifacts live in output/ next to the browser shell; the web preview
+        # build relocates them into its own project/output/.
+        artifacts = out_dir / "output"
+        artifacts.mkdir(exist_ok=True)
+        shutil.move(str(output), artifacts / output.name)
+        if image and not args.texture and (out_dir / Path(image).name).exists():
+            shutil.move(str(out_dir / Path(image).name),
+                        artifacts / Path(image).name)
+        wrote = f"output/{output.name}"
         if not args.texture and image:
-            wrote += f", {name}{Path(image).suffix}"
+            wrote += f", output/{name}{Path(image).suffix}"
         _step(f"wrote {wrote}")
-        _step(f"texture: {texture}"
-              + (" (copied beside the scene)" if not args.texture else ""))
+        _step(f"texture: {texture}")
+        # A .tscn cannot render in a browser — but the real engine can. Ship a
+        # Godot web export (WASM) around the converted scene: a minimal wrapper
+        # project loads the scene, plays its first animation, and frames it.
+        # This renders the actual .tscn through actual Godot, not a re-export
+        # through the canonical model.
+        from . import godot_preview as build
+        try:
+            build.export_preview(out_dir, name, godot_bin=args.godot)
+            _step(f"web preview: {out_dir / 'index.html'} "
+                  "(serve the output folder with python3 -m http.server)")
+        except build.ExportError as error:
+            _step(f"web preview unavailable: {error}")
         _step(f"{len(model.bones)} bones, {len(model.attachments)} attachments, "
               f"{len(model.animations)} animations")
-        _step(f"next: load {output} in Godot — a .tscn is a scene, not a web page")
+        _step(f"next: load {out_dir / 'output' / output.name} in Godot "
+              "— a .tscn is a scene, not a web page")
     return 0
 
 
@@ -161,6 +191,9 @@ def main() -> int:
                                 help=".atlas beside the input JSON (Spine→Godot)")
     convert_parser.add_argument("--texture", default=None,
                                 help="texture path the Godot scene references")
+    convert_parser.add_argument("--godot", default=None,
+                                help="Godot binary for the web preview "
+                                     "(default: GODOT_BIN env or the macOS app)")
     convert_parser.set_defaults(func=convert)
 
     compare_parser = sub.add_parser("compare")

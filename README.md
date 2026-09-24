@@ -99,6 +99,26 @@ skipped) tells you whether the output can reproduce the source.
 
 ## Viewer
 
+Every conversion direction has a browser preview:
+
+- **Godot→Spine** output: `view out.json` (or the convert step already emits
+  `index.html`) — renders via the official `spine-webgl` runtime from the CDN.
+- **Any Godot scene** (`make godot-preview`): packs an existing `.tscn` with
+  its referenced resources and runs it in the browser through the real engine.
+  Uses the same `GODOT_INPUT`/`GODOT_OUT`/`GODOT_PORT` variables.
+- **Spine→Godot** output: the convert step builds a **web preview of the real
+  Godot scene** — a WASM export of the actual `.tscn` running in the actual
+  engine, in a `preview/` subfolder, wrapped by
+  `template_godot_viewer.html` (same track-panel UI as the Spine viewer;
+  the boot script publishes the animation list to the page via
+  `JavaScriptBridge` and plays whatever track you click). No re-export
+  through the canonical model; the browser plays the scene exactly as Godot
+  would. Requires a Godot
+  installation (`GODOT_BIN`, default the macOS app) and, once per machine,
+  the web export templates (`Editor → Manage Export Templates`, or download
+  the `.tpz` from the Godot release page and copy its `web_*` files into
+  `~/Library/Application Support/Godot/export_templates/<version>/`).
+
 Every Godot→Spine conversion can be previewed without the Spine Editor:
 
 ```bash

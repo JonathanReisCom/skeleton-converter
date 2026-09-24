@@ -15,7 +15,8 @@ from .model import (
 
 def triangulate(polygons: list, vertex_count: int) -> list:
     triangles = []
-    for group in polygons or []:
+    groups = [polygons] if polygons and isinstance(polygons[0], int) else (polygons or [])
+    for group in groups:
         for index in range(1, len(group) - 1):
             triangles.extend([group[0], group[index], group[index + 1]])
     if not triangles:
@@ -273,6 +274,11 @@ def write_spine_json(model: Skeleton, output_path: str,
         polygon = att["polygon"]
         uv = att["uv"]
         weights = att["weights"]
+        if not uv or not polygon:
+            # A path (or other non-rendered) attachment has no UVs and cannot
+            # be written as a mesh; writing it would crash or draw garbage.
+            model.notes.append(f"preview: skipped attachment {att['name']!r} (no UVs)")
+            continue
         polygon_world = compose(att["position"], 0.0)
         uv_min_x = min(p[0] for p in uv)
         uv_min_y = min(p[1] for p in uv)
