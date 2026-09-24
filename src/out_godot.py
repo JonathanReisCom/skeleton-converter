@@ -126,24 +126,16 @@ def _emit_attachments(model, world, texture_path):
         weights = att["weights"]
         offset = att["position"]
 
-        # Compute each vertex's world position at rest, then convert to
-        # bone-local coordinates so the skinning is correct.
-        polygon_world = (1, 0, 0, 1, offset[0], offset[1])
-        world_points = []
-        for vertex in polygon:
-            world_points.append((polygon_world[0] * vertex[0] + polygon_world[1] * vertex[1] + polygon_world[4],
-                                 polygon_world[2] * vertex[0] + polygon_world[3] * vertex[1] + polygon_world[5]))
-
-        # Spine weighted mesh: local coords relative to each influencing bone.
-        # In Godot, vertices are in Polygon2D local space and weights reference
-        # bones. We emit vertices in Polygon2D local space (= skeleton space
-        # since Polygons node is at origin) with per-bone weights.
-        local_points = [(p[0], -p[1]) for p in world_points]
+        # Vertices are node-local and the node carries the attachment's
+        # position — exactly the structure the source scene had (Godot applies
+        # node position to skinned vertices, so the round trip must keep it).
+        local_points = [(p[0], p[1]) for p in polygon]
 
         uv_points = [[v[0], v[1]] for v in uv]
 
+        node_pos = att.get("position", (0.0, 0.0))
         props = [
-            "position = Vector2(0, 0)",
+            f"position = Vector2({round(node_pos[0], 6)}, {round(node_pos[1], 6)})",
             f'texture = ExtResource("1")',
             'skeleton = NodePath("../../Skeleton2D")',
             "polygon = PackedVector2Array(%s)" % ", ".join(

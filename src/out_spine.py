@@ -39,22 +39,33 @@ def read_png_size(path: str) -> tuple | None:
     )
 
 
+def mirror_world(world: tuple) -> tuple:
+    """A Spine-space bone transform: conjugate the Godot one by the y flip
+    (F·A·F⁻¹), mirroring translation and rotation columns."""
+    a, b, c, d, tx, ty = world
+    return (a, -b, -c, d, tx, -ty)
+
+
 def resolve_texture_path(texture_path: str, scene_path: str) -> str | None:
     if not texture_path:
         return None
     if texture_path.startswith("res://"):
         rel = texture_path[len("res://"):]
         scene_dir = Path(scene_path).resolve().parent
-        # Two roots are plausible: a real Godot project (project.godot marks
-        # it), or a conversion output folder, where the scene's own directory
-        # is the project and the texture was copied beside the scene.
+        # res:// paths are relative to a project root. Candidates: a real
+        # Godot project (project.godot marks it), the scene's own folder, or
+        # any parent that has the full relative path (a preview folder keeps
+        # referenced resources at res://player/gBot.png one level up).
         for candidate in [scene_dir, *scene_dir.parents]:
-            if (candidate / "project.godot").exists():
+            if (candidate / "project.godot").exists() or (candidate / rel).exists():
                 resolved = candidate / rel
                 if resolved.exists():
                     return str(resolved)
-        resolved = scene_dir / Path(rel).name
-        return str(resolved) if resolved.exists() else None
+        # Demos often author res:// paths against their project root, which
+        # the converted tree does not reproduce (res://player/gBot.png next
+        # to the scene). Fall back to the bare filename around the scene.
+        flat = scene_dir / Path(rel).name
+        return str(flat) if flat.exists() else None
     return texture_path
 
 
@@ -312,10 +323,20 @@ def write_spine_json(model: Skeleton, output_path: str,
                 if bone_name in bone_index_by_name and bone_name not in bones_used:
                     bones_used.append(bone_name)
             vertices = []
+            # Spine-space bone worlds: the model is Godot space (y-down) and
+            # the JSON is Spine space (y-up) — the runtime will reconstruct
+            # vertex world = Σ w · spine_bone · local, so `local` must be the
+            # inverse of the SPINE bone transform applied to the mirrored
+            # point. Computing it with the Godot transform and mirroring the
+            # result mixes conventions for rotated bones and scatters the
+            # rig (the gBot demo rendered headless pieces for months).
+            spine_world = {bone_name: mirror_world(transform_matrix)
+                           for bone_name, transform_matrix in world.items()}
             for vertex_index, vertex in enumerate(polygon):
                 world_point = transform(
                     polygon_world, (vertex[0] + att["offset"][0], vertex[1] + att["offset"][1])
                 )
+                spine_point = mirror_point(world_point)
                 entries = []
                 for bone_name, weight_list in weights:
                     if bone_name not in bone_index_by_name or vertex_index >= len(weight_list):
@@ -323,8 +344,8 @@ def write_spine_json(model: Skeleton, output_path: str,
                     weight = weight_list[vertex_index]
                     if weight <= 0:
                         continue
-                    local = transform(invert(world[bone_name]), world_point)
-                    entries.append((bone_name, mirror_point(local), weight))
+                    local = transform(invert(spine_world[bone_name]), spine_point)
+                    entries.append((bone_name, local, weight))
                 if not entries:
                     continue
                 total = sum(w for _, _, w in entries)

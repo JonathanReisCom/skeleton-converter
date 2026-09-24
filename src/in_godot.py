@@ -222,7 +222,12 @@ def node_path(node: dict) -> str:
 
 
 def parse_polygon_weights(raw) -> list:
-    """Polygon2D ``bones`` property -> [(bone_name, weights per vertex)]."""
+    """Polygon2D ``bones`` property -> [(bone_path, weights per vertex)].
+
+    Godot writes full skeleton-relative paths ("Hip/Chest"), which matter:
+    two bones can share a leaf name. Callers resolve the path against the
+    skeleton's bones.
+    """
     if not isinstance(raw, list):
         return []
     out = []
@@ -230,7 +235,7 @@ def parse_polygon_weights(raw) -> list:
     while index + 1 < len(raw):
         bone_path = raw[index]
         weights = raw[index + 1] if isinstance(raw[index + 1], list) else []
-        out.append((str(bone_path).split("/")[-1], weights))
+        out.append((str(bone_path), weights))
         index += 2
     return out
 
@@ -397,20 +402,54 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         model.bones.append(bone)
         model.by_name[bone.name] = bone
 
-    # Polygon2D attachments live in a sibling node of the skeleton
+    # Polygon2D attachments live in a sibling node of the skeleton. Two
+    # grammatures exist and both must land in skeleton space:
+    # - converted scenes (our writer): `polygon` holds absolute skeleton-space
+    #   vertices, `bones` is [(leaf, [w per vertex])], position is (0,0).
+    # - native editor scenes: `polygon` holds the INTERNAL vertices in the
+    #   polygon node's own space (node `position` offsets them into skeleton
+    #   space), `bones` is [(skeleton-relative path, [w per vertex])] with one
+    #   weight per vertex per listed bone, and `internal_vertex_count` names
+    #   how many of the listed vertices are interior.
+    # Normalize native scenes: translate vertices by the node position, and
+    # densify the weights so every attachment carries a per-vertex weight for
+    # every bone that touches it (the shape out_godot writes back).
+    # Polygon2D attachments live in a sibling node of the skeleton. Native
+    # grammar (what the demo ships and what Godot renders): vertices are
+    # NODE-LOCAL, the node `position` offsets them into skeleton space, and
+    # `bones` carries ONE weight per vertex per listed bone. The model keeps
+    # that structure verbatim — out_spine composes the position when writing
+    # the JSON, and out_godot re-emits position + local vertices, so the
+    # round trip reproduces the source scene exactly.
     polygons_path = skeleton_path.rsplit("/", 1)[0] + "/Polygons"
     for path, node in by_path.items():
         if node["type"] != "Polygon2D" or not path.startswith(polygons_path + "/"):
             continue
         props = node["props"]
         weights = parse_polygon_weights(props.get("bones", []))
+        polygon = props.get("polygon", [])
+        position = props.get("position", [0.0, 0.0])
+        vertex_count = len(polygon)
+        # Densify the weight table so every attachment carries a per-vertex
+        # weight for every bone that influences it (out_godot's shape).
+        dense = {}
+        for bone_path, weight_list in weights:
+            bone_name = bone_path.split("/")[-1]
+            for vertex_index, weight in enumerate(weight_list[:vertex_count]):
+                if weight:
+                    dense.setdefault(bone_name, {})[vertex_index] = weight
+        dense_list = [(bone_name, [dense[bone_name].get(i, 0.0)
+                                   for i in range(vertex_count)])
+                      for bone_name in sorted(dense)]
         model.attachments.append({
             "name": path.rsplit("/", 1)[-1].lower().replace(" ", "-"),
-            "polygon": props.get("polygon", []),
-            "uv": props.get("uv") or props.get("polygon", []),
+            "polygon": polygon,
+            "uv": props.get("uv") or polygon,
             "polygons": props.get("polygons", []),
-            "weights": weights,
-            "position": props.get("position", [0.0, 0.0]),
+            "weights": dense_list,
+            "position": position,
+            # Native grammar: world = nodeTransform * (vertex + offset).
+            # out_spine composes both when writing the JSON.
             "offset": props.get("offset", [0.0, 0.0]),
             "internal_vertices": props.get("internal_vertex_count", 0),
         })

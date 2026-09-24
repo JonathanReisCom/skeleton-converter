@@ -313,16 +313,29 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             # the slot on the wrong bone.
             weights_by_bone[host] = {i: 1.0 for i in range(len(world_points))}
 
+        # The JSON stores vertex locals relative to each influencing bone (in
+        # Spine space); Godot wants node-local vertices plus a node position.
+        # The influencing bone with the largest total weight is the natural
+        # node anchor: its position becomes the Polygon2D node position and
+        # the weighted world points become node-local (both mirrored back to
+        # Godot's y-down space).
+        anchor = max(weights_by_bone.items(),
+                     key=lambda item: sum(item[1].values()))[0] \
+            if weights_by_bone else host
+        anchor_world = world.get(anchor, (1, 0, 0, 1, 0, 0))
+        # spine world is y-up; the Godot node position is y-down — mirror it.
+        node_pos = (anchor_world[4], -anchor_world[5])
         model.attachments.append({
             "name": slot_name.lower(),
-            "polygon": [(p[0], -p[1]) for p in world_points],
+            "polygon": [(p[0] - anchor_world[4], -(p[1] - anchor_world[5]))
+                        for p in world_points],
             "uv": uv_points,
             "polygons": triangles,
             "weights": [
                 (bn, [vw.get(i, 0.0) for i in range(len(world_points))])
                 for bn, vw in weights_by_bone.items()
             ],
-            "position": (0.0, 0.0),
+            "position": [node_pos[0], node_pos[1]],
             "offset": (0.0, 0.0),
             "internal_vertices": 0,
         })

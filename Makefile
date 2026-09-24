@@ -38,47 +38,47 @@ SPINE_OUT ?= $(HOME)/Desktop/convert-spine-to-godot
 # .tscn -> Spine JSON + .atlas + texture + viewer.html, then serve the folder.
 # Ctrl+C stops the server; the output stays on disk.
 godot-to-spine:
-	@test -n "$(GODOT_INPUT)" || { \
-	  echo "error: GODOT_INPUT is empty. Set it in local.mk, e.g."; \
-	  echo "  GODOT_INPUT := ~/path/to/player.tscn"; \
+	@test -n "$(INPUT_GODOT_TO_SPINE)" || { \
+	  echo "error: INPUT_GODOT_TO_SPINE is empty. Set it in local.mk, e.g."; \
+	  echo "  INPUT_GODOT_TO_SPINE := ~/path/to/player.tscn"; \
 	  exit 1; }
-	@test -n "$(GODOT_OUT)" && test "$(GODOT_OUT)" != "/" || { \
-	  echo "error: refusing to rm -rf GODOT_OUT='$(GODOT_OUT)'"; exit 1; }
-	@echo "--> clearing old output: $(GODOT_OUT)"
-	@rm -rf "$(GODOT_OUT)"
+	@test -n "$(OUTPUT_GODOT_TO_SPINE)" && test "$(OUTPUT_GODOT_TO_SPINE)" != "/" || { \
+	  echo "error: refusing to rm -rf OUTPUT_GODOT_TO_SPINE='$(OUTPUT_GODOT_TO_SPINE)'"; exit 1; }
+	@echo "--> clearing old output: $(OUTPUT_GODOT_TO_SPINE)"
+	@rm -rf "$(OUTPUT_GODOT_TO_SPINE)"
 	@echo "--> converting Godot scene -> Spine bundle"
 	@$(PYTHON) -m src.cli convert --from godot --to spine \
-	  "$(GODOT_INPUT)" -o "$(GODOT_OUT)" --name "$(NAME)"
+	  "$(INPUT_GODOT_TO_SPINE)" -o "$(OUTPUT_GODOT_TO_SPINE)" --name "$(NAME)"
 	@echo "--> serving the Spine viewer on http://localhost:$(GODOT_PORT)/  (Ctrl+C stops)"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"; \
+	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(OUTPUT_GODOT_TO_SPINE)"; \
 	fi
 
 # Spine JSON -> .tscn + the page image, then serve the Godot web preview. The
 # browser renders the real .tscn through the real engine (WASM export).
 
 spine-to-godot:
-	@test -n "$(SPINE_INPUT)" || { \
-	  echo "error: SPINE_INPUT is empty. Set it in local.mk, e.g."; \
-	  echo "  SPINE_INPUT := ~/path/to/hero.json"; \
+	@test -n "$(INPUT_SPINE_TO_GODOT)" || { \
+	  echo "error: INPUT_SPINE_TO_GODOT is empty. Set it in local.mk, e.g."; \
+	  echo "  INPUT_SPINE_TO_GODOT := ~/path/to/hero.json"; \
 	  exit 1; }
-	@test -n "$(SPINE_OUT)" && test "$(SPINE_OUT)" != "/" || { \
-	  echo "error: refusing to rm -rf SPINE_OUT='$(SPINE_OUT)'"; exit 1; }
-	@echo "--> clearing old output: $(SPINE_OUT)"
-	@rm -rf "$(SPINE_OUT)"
+	@test -n "$(OUTPUT_SPINE_TO_GODOT)" && test "$(OUTPUT_SPINE_TO_GODOT)" != "/" || { \
+	  echo "error: refusing to rm -rf OUTPUT_SPINE_TO_GODOT='$(OUTPUT_SPINE_TO_GODOT)'"; exit 1; }
+	@echo "--> clearing old output: $(OUTPUT_SPINE_TO_GODOT)"
+	@rm -rf "$(OUTPUT_SPINE_TO_GODOT)"
 	@echo "--> converting Spine JSON -> Godot scene"
 	@$(PYTHON) -m src.cli convert --from spine --to godot \
-	  "$(SPINE_INPUT)" -o "$(SPINE_OUT)" --name "$(NAME)"
-	@test -d "$(SPINE_OUT)/output" || { \
+	  "$(INPUT_SPINE_TO_GODOT)" -o "$(OUTPUT_SPINE_TO_GODOT)" --name "$(NAME)"
+	@test -d "$(OUTPUT_SPINE_TO_GODOT)/output" || { \
 	  echo "error: web preview was not built (is Godot installed? see GODOT_BIN)"; \
 	  exit 1; }
 	@echo "--> serving the Godot web preview on http://localhost:$(SPINE_PORT)/  (Ctrl+C stops)"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(SPINE_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(SPINE_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(SPINE_OUT)"; \
+	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(OUTPUT_SPINE_TO_GODOT)"; \
 	fi
 
 # Pack an existing Godot scene (.tscn) and run it in the browser: the real
@@ -90,23 +90,45 @@ spine-to-godot:
 # tree is silenced so the preview owns the pose.
 # Everything can be overridden: make godot-preview GODOT_INPUT=... GODOT_OUT=... NAME=bot
 godot-preview:
-	@test -n "$(GODOT_INPUT)" || { \
-	  echo "error: GODOT_INPUT is empty. Set it in local.mk, e.g."; \
-	  echo "  GODOT_INPUT := ~/path/to/scene.tscn"; \
+	@test -n "$(INPUT_GODOT_PREVIEW)" || { \
+	  echo "error: INPUT_GODOT_PREVIEW is empty. Set it in local.mk, e.g."; \
+	  echo "  INPUT_GODOT_PREVIEW := ~/path/to/scene.tscn"; \
 	  exit 1; }
-	@test -f "$(GODOT_INPUT)" || { \
-	  echo "error: scene not found: $(GODOT_INPUT)"; exit 1; }
-	@test -n "$(GODOT_OUT)" && test "$(GODOT_OUT)" != "/" || { \
-	  echo "error: refusing to rm -rf GODOT_OUT='$(GODOT_OUT)'"; exit 1; }
-	@echo "--> packing $(GODOT_INPUT) into $(GODOT_OUT)"
+	@test -f "$(INPUT_GODOT_PREVIEW)" || { \
+	  echo "error: scene not found: $(INPUT_GODOT_PREVIEW)"; exit 1; }
+	@test -n "$(OUTPUT_GODOT_PREVIEW)" && test "$(OUTPUT_GODOT_PREVIEW)" != "/" || { \
+	  echo "error: refusing to rm -rf OUTPUT_GODOT_PREVIEW='$(OUTPUT_GODOT_PREVIEW)'"; exit 1; }
+	@echo "--> packing $(INPUT_GODOT_PREVIEW) into $(OUTPUT_GODOT_PREVIEW)"
 	@$(PYTHON) -c "from src.godot_preview import preview_scene; \
-preview_scene('$(GODOT_INPUT)', '$(GODOT_OUT)', '$(NAME)')"
+preview_scene('$(INPUT_GODOT_PREVIEW)', '$(OUTPUT_GODOT_PREVIEW)', '$(NAME)')"
 	@echo "--> serving on http://localhost:$(GODOT_PORT)/  (Ctrl+C stops)"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(GODOT_OUT)"; \
+	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(OUTPUT_GODOT_PREVIEW)"; \
 	fi
+
+# Start every preview server from PREVIEWS (local.mk): "path:port path:port".
+# Detached with nohup, so make returns; logs go to /dev/null. Ports already
+# in use are skipped (a server for that folder is probably already running).
+previews:
+	@for pair in $(PREVIEWS); do \
+	  dir="$${pair%%:*}"; port="$${pair##*:}"; \
+	  test -d "$$dir" || { echo "--> skip $$dir (folder does not exist)"; continue; }; \
+	  if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$$port"; then \
+	    echo "--> port $$port already in use — skipping $$dir"; \
+	  else \
+	    echo "--> serving $$dir on http://localhost:$$port/"; \
+	    nohup $(PYTHON) -m http.server $$port --directory "$$dir" >/dev/null 2>&1 & \
+	  fi; \
+	done; \
+	echo "--> all servers started detached. Stop with: make previews-stop"
+
+previews-stop:
+	@for pair in $(PREVIEWS); do \
+	  port="$${pair##*:}"; \
+	  lsof -ti :$$port 2>/dev/null | xargs kill 2>/dev/null && echo "--> stopped :$$port" || echo "--> :$$port was not running"; \
+	done
 
 test:
 	$(PYTHON) -m pytest tests/ -v

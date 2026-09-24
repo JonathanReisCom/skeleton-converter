@@ -109,21 +109,22 @@ def export_preview(out_dir: Path, name: str, godot_bin: str | None = None) -> No
         shutil.rmtree(project)
     _prepare_wrapper(project, f"output/{name}")
 
-    # The converted scene and its texture live in output/ inside the wrapper
-    # project (matching the on-disk layout); the scene's texture reference is
-    # rewritten to the new res:// path so the preview loads it from there.
+    # The scene is copied AS-IS — rewriting its ext_resources (a texture here,
+    # a script there) once corrupted a whole scene (the script became the
+    # texture). Referenced resources are copied at their original res:// paths:
+    # res://animation.png resolves to output/animation.png inside the wrapper,
+    # and references the wrapper cannot satisfy fall to Godot's missing-
+    # resource handling (converted scenes reference only what exists here).
     project_output = project / "output"
     project_output.mkdir()
+    shutil.copy2(scene, project_output / scene.name)
     scene_text = scene.read_text(encoding="utf-8")
-    # The scene may reference its textures by any name/subfolder (a swapped-in
-    # raw demo scene references res://player/gBot.png); every texture ext_
-    # resource is redirected to the single texture shipped in output/.
-    scene_text = re.sub(r'path="res://[^"]*\.[a-zA-Z]+"',
-                        f'path="res://output/{name}.png"', scene_text)
-    (project_output / scene.name).write_text(scene_text, encoding="utf-8")
-    for image in out_dir.glob(f"{name}.*"):
-        if image.suffix.lower() in (".png", ".jpg", ".webp"):
-            shutil.copy2(image, project_output / image.name)
+    for referenced in re.findall(r'path="res://([^"]+)"', scene_text):
+        candidate = out_dir / "output" / referenced
+        if candidate.exists():
+            dest = project / referenced
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(candidate, dest)
 
     _run_export(project, out_dir, _godot(godot_bin))
     _finish(project, out_dir)
