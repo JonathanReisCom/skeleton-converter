@@ -200,6 +200,15 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             inherit=bone_data.get("inherit", "normal"),
             path=bone_relative_path[name],
         )
+        # Bind pose carried by the godot->spine leg as extension fields
+        # (Godot values, y-down): without it out_godot would emit rest ==
+        # node pose and lose scenes whose rest differs from the pose.
+        if "restX" in bone_data:
+            bone.rest = (
+                [bone_data["restX"], bone_data["restY"]],
+                bone_data.get("restRotation", 0.0),
+                (bone_data.get("restScaleX", 1.0), bone_data.get("restScaleY", 1.0)),
+            )
         model.bones.append(bone)
         model.by_name[name] = bone
 

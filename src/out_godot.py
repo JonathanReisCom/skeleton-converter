@@ -100,11 +100,18 @@ def _emit_bones(model, world):
                 f"bone_angle = {round(bone.rotation_deg, 6)}",
             ]
         # Godot's Transform2D stores columns: x = (cos, sin), y = (-sin, cos).
+        # rest comes from the model's bind pose when the godot->spine leg
+        # carried one (scenes whose rest differs from the node pose); the
+        # rotation in the rest drives the skinning basis and must NOT be the
+        # node pose's rotation.
+        r_pos, r_rot, r_scale = bone.rest or (
+            bone.position, bone.rotation_deg, bone.scale)
+        r_cos, r_sin = math.cos(math.radians(r_rot)), math.sin(math.radians(r_rot))
         props.append(
             "rest = Transform2D({}, {}, {}, {}, {}, {})".format(
-                round(cos * bone.scale[0], 6), round(sin * bone.scale[0], 6),
-                round(-sin * bone.scale[1], 6), round(cos * bone.scale[1], 6),
-                round(bone.position[0], 6), round(bone.position[1], 6),
+                round(r_cos * r_scale[0], 6), round(r_sin * r_scale[0], 6),
+                round(-r_sin * r_scale[1], 6), round(r_cos * r_scale[1], 6),
+                round(r_pos[0], 6), round(r_pos[1], 6),
             )
         )
         if bone.inherit != "normal":

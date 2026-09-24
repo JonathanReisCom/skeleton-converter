@@ -124,6 +124,24 @@ previews:
 	done; \
 	echo "--> all servers started detached. Stop with: make previews-stop"
 
+# Side-by-side compare shell: one page, both preview bundles in iframes,
+# shared play/freeze controls. Serves the bundles' PARENT folder (one origin
+# for both iframes). COMPARE_GODOT/COMPARE_SPINE come from local.mk.
+COMPARE_PORT ?= 8083
+compare:
+	@test -f "$(COMPARE_GODOT)/index.html" || { \
+	  echo "error: COMPARE_GODOT has no index.html: $(COMPARE_GODOT)"; exit 1; }
+	@test -f "$(COMPARE_SPINE)/index.html" || { \
+	  echo "error: COMPARE_SPINE has no index.html: $(COMPARE_SPINE)"; exit 1; }
+	@$(PYTHON) -c "from src.compare_out import emit_compare; \
+emit_compare('$(COMPARE_GODOT)', '$(COMPARE_SPINE)')"
+	@echo "--> compare page: http://localhost:$(COMPARE_PORT)/compare.html  (Ctrl+C stops)"
+	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(COMPARE_PORT))) == 0 else 1)'; then \
+	  echo "--> port $(COMPARE_PORT) already in use — a previous server is probably still up; open the URL above"; \
+	else \
+	  $(PYTHON) -m http.server $(COMPARE_PORT) --directory "$(COMPARE_GODOT)/.."; \
+	fi
+
 previews-stop:
 	@for pair in $(PREVIEWS); do \
 	  port="$${pair##*:}"; \

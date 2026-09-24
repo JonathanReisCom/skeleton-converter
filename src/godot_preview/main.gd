@@ -133,6 +133,15 @@ func _collect(node: Node, klass) -> Array:
 		out.append_array(_collect(child, klass))
 	return out
 
+func _find_skeleton(node: Node) -> Skeleton2D:
+	if node is Skeleton2D:
+		return node
+	for child in node.get_children():
+		var found := _find_skeleton(child)
+		if found != null:
+			return found
+	return null
+
 func _find_player(node: Node) -> AnimationPlayer:
 	if node is AnimationPlayer:
 		return node

@@ -135,6 +135,12 @@ class Bone:
     length: float = 0.0
     inherit: str = "normal"
     path: str = ""  # relative to Skeleton2D
+    # Godot bind pose (Bone2D `rest`): position, rotation_deg, scale. Godot
+    # skins meshes with pose * rest^-1, so when a scene's rest differs from
+    # its node pose the mesh basis differs from the bone basis — both must
+    # survive the round trip. None means rest == node pose (Spine-authored
+    # rigs, where the two coincide).
+    rest: tuple | None = None
 
 
 @dataclass

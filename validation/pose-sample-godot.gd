@@ -18,9 +18,17 @@ func _init():
 	var scale: float = float(args[3]) if args.size() > 3 else 1.0
 
 	var scene: Node = (load(scene_path) as PackedScene).instantiate()
+	# Silence any AnimationTree BEFORE adding the scene to the tree: the tree
+	# would otherwise apply the demo's state machine during the first process
+	# frame (before our seek), leaving residual rotations on the bones.
+	for tree in _find_all(scene, AnimationTree):
+		tree.active = false
+		# The demo's player.gd re-enables the tree in its own _ready (which
+		# runs inside add_child, after our flag) — disabling PROCESSING also
+		# keeps it inert whatever the script does.
+		tree.process_mode = Node.PROCESS_MODE_DISABLED
 	root.add_child(scene)
 	await process_frame
-
 	var player: AnimationPlayer = scene.get_node("AnimationPlayer")
 	player.play(animation)
 	player.seek(sample_time, true)
@@ -33,6 +41,8 @@ func _init():
 		# Report in skeleton space, un-scaled, Y still down (the comparator flips).
 		var position := (transform.origin - skeleton_origin) / scale
 		print("POSE ", bone.name, " ", position.x, " ", position.y)
+		print("ROT ", bone.name, " ", rad_to_deg(bone.get_global_transform().get_rotation()),
+				" local=", rad_to_deg(bone.rotation))
 	quit()
 
 func _all_bones(node: Node) -> Array:
@@ -41,4 +51,12 @@ func _all_bones(node: Node) -> Array:
 		if child is Bone2D:
 			out.append(child)
 			out.append_array(_all_bones(child))
+	return out
+
+func _find_all(node: Node, klass) -> Array:
+	var out: Array = []
+	if is_instance_of(node, klass):
+		out.append(node)
+	for child in node.get_children():
+		out.append_array(_find_all(child, klass))
 	return out

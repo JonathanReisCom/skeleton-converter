@@ -328,6 +328,30 @@ isolation step here (node ✓, texture ✓, data ✗ → polygons ✗ → bones 
 path semantics ✓) took one export; reasoning about the renderer guessed
 wrong twice.
 
+### Rule: Godot binds skinned meshes to the Bone2D `rest`, not the node pose
+
+Godot skins every mesh vertex with `pose * rest^-1` — the bind basis is the
+Bone2D `rest` property, and it can differ from the node pose (the official
+demo ships rests with identity rotations while the node rotations carry the
+rig's angles). Two consequences that both look like "the animation is broken"
+while every bone number checks out:
+
+1. **Mesh locals must be stored against the global rest chain** (`out_spine`
+   uses `_godot_rest_worlds`, not the node-pose worlds). Using the setup
+   bakes every bone's setup rotation into the mesh — the gBot's head rendered
+   16.5° tilted forever while `validate-roundtrip` passed (it compares bones).
+2. **`rest` must survive the Spine JSON round trip**: it is not representable
+   in Spine's own format, so `out_spine` writes godot-value extension fields
+   (`restX/restY/restRotation/restScaleX/restScaleY`) on each bone, `in_spine`
+   carries them into the model, and `out_godot` emits them as the Bone2D
+   `rest`. Real Spine runtimes ignore unknown keys.
+
+Also two Godot AnimationPlayer edge rules, both engine-verified: before the
+first key a track **extrapolates its first real segment backwards**
+(`value(t) = key1 + slope2*(t1 - t)` — hold and setup-interp are both wrong),
+and past the last key it **freezes** (a looping Spine track wraps instead —
+samplers must use loop=false or times past the duration compare garbage).
+
 ### Rule: each interpolation format keeps its own value space
 
 Bezier control points live in the raw JSON's **offset space** (the values a

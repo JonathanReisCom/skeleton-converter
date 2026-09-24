@@ -48,7 +48,10 @@ const data = new SkeletonJson(loader).readSkeletonData(
 );
 const skeleton = new Skeleton(data);
 const state = new AnimationState(new AnimationStateData(data));
-state.setAnimation(0, animation, true);
+// Looping is OFF deliberately: the Godot AnimationPlayer sampler freezes
+// past the last key, and a looping Spine track would wrap to t=0 instead —
+// comparing t beyond the animation length would then be invalid.
+state.setAnimation(0, animation, false);
 state.update(Number(timeRaw));
 state.apply(skeleton);
 skeleton.updateWorldTransform(Physics.update);

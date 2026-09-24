@@ -39,6 +39,24 @@ def read_png_size(path: str) -> tuple | None:
     )
 
 
+def _godot_rest_worlds(model) -> dict:
+    """bone name -> GLOBAL REST world in Godot space, chained from Bone2D
+    rests (not node poses). Godot skins meshes with pose * global_rest^-1,
+    so this — not the node-pose world — is the bind basis for mesh locals.
+    Bones without an explicit rest fall back to their node pose (Spine
+    authoring, where bind == setup)."""
+    world = {}
+    for bone in model.bones:
+        pos, rot_deg, scale = bone.rest or (
+            bone.position, bone.rotation_deg, bone.scale)
+        parent = world.get(bone.parent, (1, 0, 0, 1, 0, 0))
+        cos, sin = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
+        sx, sy = scale
+        world[bone.name] = multiply(parent, (
+            cos * sx, sin * sx, -sin * sy, cos * sy, pos[0], pos[1]))
+    return world
+
+
 def mirror_world(world: tuple) -> tuple:
     """A Spine-space bone transform: conjugate the Godot one by the y flip
     (F·A·F⁻¹), mirroring translation and rotation columns."""
@@ -274,6 +292,16 @@ def write_spine_json(model: Skeleton, output_path: str,
         entry["x"] = round(bone.position[0], 4)
         entry["y"] = round(-bone.position[1], 4)
         entry["rotation"] = round(-bone.rotation_deg, 4)
+        # Bind pose (Bone2D rest) travels as extension fields: real Spine
+        # runtimes ignore unknown keys, and out_godot reads them back so the
+        # Godot round trip keeps rest != node pose intact (Godot values —
+        # y-down, degrees).
+        if bone.rest is not None:
+            entry["restX"] = round(bone.rest[0][0], 4)
+            entry["restY"] = round(bone.rest[0][1], 4)
+            entry["restRotation"] = round(bone.rest[1], 4)
+            entry["restScaleX"] = round(bone.rest[2][0], 4)
+            entry["restScaleY"] = round(bone.rest[2][1], 4)
         if bone.length:
             entry["length"] = round(bone.length, 4)
         if abs(bone.scale[0] - 1.0) > 1e-6 or abs(bone.scale[1] - 1.0) > 1e-6:
@@ -330,8 +358,14 @@ def write_spine_json(model: Skeleton, output_path: str,
             # point. Computing it with the Godot transform and mirroring the
             # result mixes conventions for rotated bones and scatters the
             # rig (the gBot demo rendered headless pieces for months).
-            spine_world = {bone_name: mirror_world(transform_matrix)
-                           for bone_name, transform_matrix in world.items()}
+            # Mesh bind basis: Godot skins vertices with pose * rest^-1, so
+            # the JSON local must be stored against the bone's GLOBAL REST
+            # (not the setup pose) — otherwise every skinned mesh carries the
+            # bone's setup rotation as a spurious offset (the demo's head
+            # rendered 16.5° off). rest_world is godot space; mirror_world
+            # conjugates it into Spine space.
+            spine_rest = {bone_name: mirror_world(transform_matrix)
+                          for bone_name, transform_matrix in _godot_rest_worlds(model).items()}
             for vertex_index, vertex in enumerate(polygon):
                 world_point = transform(
                     polygon_world, (vertex[0] + att["offset"][0], vertex[1] + att["offset"][1])
@@ -344,7 +378,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                     weight = weight_list[vertex_index]
                     if weight <= 0:
                         continue
-                    local = transform(invert(spine_world[bone_name]), spine_point)
+                    local = transform(invert(spine_rest[bone_name]), spine_point)
                     entries.append((bone_name, local, weight))
                 if not entries:
                     continue
@@ -378,17 +412,51 @@ def write_spine_json(model: Skeleton, output_path: str,
         animation = {"bones": {}}
         for bone_name, props in tracks.items():
             bone = next((b for b in model.bones if b.name == bone_name), None)
+
             bone_tracks = {}
+
+            def _clamp_first_last(keys: list, value_key: str) -> list:
+                """Reproduce Godot's AnimationPlayer edge behaviour: before the
+                first key the engine extrapolates the FIRST REAL SEGMENT
+                (key1 -> key2) backwards: value(t) = key1 + slope*(t1 - t),
+                slope = (key2 - key1)/(t2 - t1) — verified against the engine
+                (idle chest/head and fall legs land exactly on this line). The
+                Spine runtime instead holds nothing outside the keyed range
+                (flat setup pose), which diverges from Godot for any track
+                whose first key is not at t=0. Insert an extrapolated key at
+                t=0 so both runtimes sample the same ramp."""
+                if not keys:
+                    return keys
+                out = list(keys)
+                if out[0]["time"] > 0.0:
+                    def _val(key, field):
+                        return key.get(field, 0.0) if field != "value" else key["value"]
+                    k1, k2 = out[0], out[1] if len(out) > 1 else out[0]
+                    first = dict(k1)
+                    first["time"] = 0.0
+                    if k2 is not k1:
+                        t1, t2 = k1["time"], k2["time"]
+                        span = t2 - t1
+                        if span > 0:
+                            for field in ("value", "x", "y"):
+                                if field in k1 and field in k2:
+                                    slope = (k2[field] - k1[field]) / span
+                                    first[field] = round(
+                                        _val(k1, field) + slope * (t1 - 0.0), 6)
+                    first.pop("curve", None)
+                    out.insert(0, first)
+                return out
+
             if props.get("rotate"):
                 setup_rotation = bone.rotation_deg if bone else 0.0
-                bone_tracks["rotate"] = [
+                bone_tracks["rotate"] = _clamp_first_last([
                     {"time": round(k["time"], 6), "value": round(-(k["angle"] - setup_rotation), 6),
                      **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {})}
                     for k in props["rotate"]
-                ]
+                ], "value")
             if props.get("translate"):
                 setup_position = bone.position if bone else (0.0, 0.0)
-                bone_tracks["translate"] = [
+                bone_tracks["translate"] = _clamp_first_last([
                     {
                         "time": round(k["time"], 6),
                         "x": round(k["x"] - setup_position[0], 6),
@@ -396,7 +464,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                         **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {}),
                     }
                     for k in props["translate"]
-                ]
+                ], "value")
             if bone_tracks:
                 animation["bones"][bone_name] = bone_tracks
         spine["animations"][anim_name] = animation

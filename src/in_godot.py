@@ -65,6 +65,9 @@ def parse_value(raw: str):
     raw = raw.strip()
     if raw.startswith("Vector2("):
         return parse_vec(raw)
+    if raw.startswith("Transform2D("):
+        return [float(part) for part in
+                raw[len("Transform2D("):-1].split(",")]
     if raw.startswith("PackedFloat32Array("):
         return parse_float_array(raw)
     if raw.startswith("PackedInt32Array("):
@@ -379,11 +382,7 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         position = props.get("position", [0.0, 0.0])
         rotation_deg = math.degrees(props.get("rotation", 0.0))
         scale = props.get("scale", [1.0, 1.0])
-        rest = props.get("rest")
-        if isinstance(rest, list) and len(rest) == 6:
-            _xx, xy, _yx, _yy, ox, oy = rest
-            position = [ox, oy]
-            rotation_deg = math.degrees(math.atan2(xy, xx))
+        rest_prop = props.get("rest")
         parent = "/".join(relative.split("/")[:-1]) or None
         bone = Bone(
             name=relative.split("/")[-1],
@@ -395,6 +394,15 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         )
         bone.length = props.get("length", 0.0)
         bone.path = relative
+        # Bone2D bind pose (skinning basis): pose * rest^-1 is what Godot
+        # applies to skinned mesh vertices, so when rest differs from the
+        # node pose (this demo: rest rotations are all zero while the node
+        # rotations carry the rig's angles) the mesh basis differs from the
+        # bone basis — carry both through the pipeline.
+        if isinstance(rest_prop, list) and len(rest_prop) == 6:
+            xx, xy, yx, yy, ox, oy = rest_prop
+            bone.rest = ([ox, oy], math.degrees(math.atan2(xy, xx)),
+                         (math.hypot(xx, xy), math.hypot(yx, yy)))
         # Record the Spine inherit mode if the scene carries it as metadata
         # (emitted by the Spine->Godot direction for loss tracking).
         if "metadata/spine_inherit" in props:
