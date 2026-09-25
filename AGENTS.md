@@ -134,7 +134,10 @@ path. Consequences to respect:
 
 1. Write the importer: format file → canonical model.
 2. Write the exporter: canonical model → format file.
-3. Add a fixture to `tests/fixtures/` (MIT or CC0 licensed only).
+3. Put a third-party fixture in `tests/fixtures/` **locally, never committed**
+   (MIT or CC0 licensed only; the repo ships no sample skeletons or assets) and
+   make the test skip when it is absent — `tests/ci_rig.py` synthesizes a rig in
+   code so CI still exercises the real converters and the mesh-parity gate.
 4. Write a round-trip test: `fixture → model → fixture` with numeric tolerance.
 5. If the format has a live runtime, write a ground-truth sampler (like
    `pose-sample-godot.gd` or `pose-sample-spine.mjs`) and add it to the
@@ -309,6 +312,17 @@ owns the pose through the track panel; it is not a level runtime. Scripts are
 still copied and their node behavior preserved — only the per-frame gameplay
 loop is frozen.
 
+### Rule: the preview's inspect hook is instrumentation, not dead code
+
+The web-preview wrapper exposes `window.previewInspect` and pushes a dump into
+`window.previewInspectData` (bones' global poses + rests, polygon node
+transforms, base vertices). It is the browser-side half of the skinning-parity
+workflow — the analyst redefines `previewInspectData` in the DevTools console to
+capture a frame and recompute `pose * rest^-1` against the runtime's numbers.
+Same for the probe outputs `SCALE`/`VIS` in `validation/pose-sample-godot.gd`.
+Keep them working: deleting them removes the only way to explain a difference
+that the numeric gates report without naming a cause.
+
 ### Rule: the Godot .tscn format has silent render-killers
 
 Three format details make a skinned Polygon2D render *nothing* — no error,
@@ -376,6 +390,38 @@ linear segments while Godot solves the cubic exactly, so ≤0.13° difference
 between engines on a hard curve is inherent to the runtimes. When two layers
 disagree about which axis a merged translate curve half belongs to
 (`_merge_axis`), the fix is bookkeeping, not math.
+
+### Rule: mirror the runtime's slot state at all three boundaries
+
+An attachment timeline is not one feature but three edge behaviours, and each
+one silently produced a wrong frame when missed (all found with the engine
+probe on the official alien, `validation/pose-sample-godot.gd` + the `__slots`
+block of `pose-sample-spine.mjs`):
+
+1. **`setup` ≠ `equipped`.** `Attachment.setup` is the entry the runtime draws
+   with no timeline applied (the static `Polygon2D` visibility); `equipped`
+   covers every entry drawn at some point. Emitting the static flag from
+   `equipped` shows props the runtime hides.
+2. **Godot holds a value track's FIRST key backwards.** A timeline starting
+   after `t=0` needs a synthetic `t=0` key holding the setup state.
+3. **Boolean tracks must be discrete** (`interp = 0` / `update = 1`): linear
+   interpolation blends `false` → `true` as a float, and any non-zero blend
+   reads as visible, so the prop appears a whole segment early.
+
+Two more conventions worth knowing before trusting a diff: Godot applies a key
+*at* its time while the runtime's timeline search applies it strictly after
+(one-sample boundary), and a Spine scale key that omits `x`/`y` means 1, not
+the previous key.
+
+### Rule: one matrix convention per chain
+
+`godot_rest_worlds` chains `compose`-based (standard row-major) matrices; Godot
+file-literal order is a **transpose** of that (`godot_matrix_from_standard`
+converts at the boundary). Mixing the two inside a chain silently inverts the
+basis, and every bone with a non-zero rest rotation lands its attachment
+geometry at twice that rotation — while identity-rested rigs (the demo, the
+hero) pass. A synthesized gate with rotated rests is what exposed it; keep
+gates that generate the awkward case instead of trusting the sample rigs.
 
 ## Docs maintenance
 

@@ -199,6 +199,14 @@ wrong one shears every skinned vertex, because Godot skins with
 rest = Transform2D(0.3366, 0.9416, -0.9416, 0.3366, ...)  # 70.3° bone
 ```
 
+Chaining a global rest world must stay in **one** convention: multiplying a
+Godot-literal matrix through a standard-order `multiply` silently transposes the
+basis, and every bone whose rest rotation is non-zero then lands its attachment
+geometry at twice that rotation. Identity rests hide it completely — which is
+why a synthesized gate with rotated rests had to exist before it surfaced
+(`godot_rest_worlds` is compose-based now; callers that need the file-literal
+order convert with `godot_matrix_from_standard`).
+
 ### Absolute vs offset animation values
 
 Godot `Animation` tracks hold **absolute** local transforms. Spine `rotate` and
@@ -268,6 +276,36 @@ does. Two traps:
 - **Naming collisions.** Entries with the same name in different slots are
   deduplicated at the node level; the slot survives only as metadata, never as
   part of the node name.
+
+### Attachment timelines mirror the runtime's slot state
+
+The runtime draws a slot's **setup attachment** until an attachment timeline
+key applies; after that, the entry the key names (`None` hides the slot). The
+Godot leg mirrors that at three boundaries, each of which produced a wrong
+frame when missed:
+
+- **`setup` is not `equipped`.** `Attachment.setup` marks the slot's setup
+  attachment (the static `Polygon2D` visibility), `Attachment.equipped` marks
+  every entry the rig draws at some point. Using "equipped" for the static flag
+  draws props the runtime hides before the first key.
+- **A value track's first key is held backwards.** A timeline starting after
+  `t=0` needs a synthetic `t=0` key holding the setup state, or the prop is
+  visible from frame zero.
+- **Discrete, never linear.** Linear interpolation blends `false` → `true` as a
+  float and any non-zero blend reads as visible, so the prop appears a whole
+  segment early (`interp = 0` / `update = 1` on those tracks).
+
+Sampling *exactly* on a key time can differ by one sample: Godot applies a key
+at its time, the runtime's timeline search applies it strictly after. Verified
+against the official alien's `death`: 352 slot samples across four animations,
+350 exact, the 2 remaining being that boundary.
+
+### Scale timelines
+
+Absolute local scale, identical in both spaces — a magnitude has no direction,
+so there is no mirroring to get wrong. A Spine key that omits `x`/`y` means
+**1**, not the previous key (the runtime's `readTimeline2` default). Emitted as
+`:scale` value tracks or per-axis `:scale:x`/`:scale:y` bezier tracks.
 
 ### Spine `inherit` modes
 

@@ -28,14 +28,23 @@
 
 ### Known gaps
 
-- [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate` are
-      read). Measured victim on the hero: `head-turn` flips the head with a
-      `stepped` scale key (x=-1) — the flip never reaches the converted rig
-      and its children mirror to the wrong side (hair01 worldY sign flip,
-      122-unit deviation). Rigs that animate scale deviate
+- [x] ~~Spine `scale` animation tracks are dropped~~ — FIXED: `scale` timelines
+      are read into `Key.scale` (absolute local scale, a missing x/y means 1
+      per the runtime's `readTimeline2` default), written as `:scale` value
+      tracks or per-axis `:scale:x`/`:scale:y` bezier tracks, and read back.
+      Engine-verified on the hero's `run-from fall`: 44 bones x 6 sample times
+      agree with the runtime to 1.7e-4 (the residual is the runtime's 10-step
+      bezier table). Victim to keep in mind: `head-turn`'s stepped x=-1 flip now
+      reaches the rig
 - [ ] Transform and physics constraints are not baked (IK and path are) — see
       `unsupported_constraints()`; the bones they drive keep their animated
-      values
+      values. Reachability, measured against the local corpora: **transform
+      (follow)** constraints are stateless — alien 3, mix-and-match 17, chibi 1,
+      celestial-circus 3 — so the IK/path bake pattern applies and the numeric
+      harness can verify them; **physics** jiggle constraints carry a stateful
+      simulation (celestial-circus 30, cloud-pot 26) and need the runtime's own
+      solver ported (`PhysicsConstraint.js`) plus time-stepped verification, so
+      the cost is a port, not a formula
 - [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
       bone along a chain (~0.42 after four), independent of constraints. It
       predates the constraint work and is the largest remaining error source
@@ -57,10 +66,18 @@
       so the Godot viewer switches variants per slot exactly like the Spine
       viewer (verified on the template dummy: identical option lists, and
       `Eye_laugh` / `cloakObject_03` render identically in both panes)
-- [ ] Attachment **timelines** (a slot changing attachment mid-animation) are
-      still not converted: switching a variant in the Godot viewer shows the
-      setup-pose geometry for the whole animation. Fix shape: emit the slot's
-      attachment changes as `Polygon2D` visibility tracks on the same timeline
+- [x] ~~Attachment timelines (a slot changing attachment mid-animation) are not
+      converted~~ — FIXED: `slots.<slot>.attachment` becomes one **discrete**
+      boolean `visible` track per `Polygon2D` of the slot (linear interpolation
+      blends false->true as a float, and any non-zero blend reads as visible, so
+      a prop appeared a whole segment early), plus a synthetic `t=0` key holding
+      the setup state (Godot holds a value track's first key backwards; the
+      runtime draws the setup attachment before the first key). Engine-verified
+      against the official alien's `death`: 352 slot samples across four
+      animations, 350 exact — the two remaining differ only when sampling
+      *exactly* on a key time, where Godot applies the key at its time and the
+      runtime's timeline search applies it strictly after (one-sample boundary
+      convention, not a conversion error)
 - [ ] A native Godot scene's `Sprite2D` position offset is not representable
       in Spine (which has no scene-level offset — only bones). Measured victim:
       the official hero demo's `Sprite2D.position = (0, -15)`; the converted
@@ -75,11 +92,6 @@
       linear segments (`setBezier` pre-samples), Godot solves the cubic
       exactly — a ≤0.13° difference between engines on a hard curve is
       inherent to the runtimes, not a conversion error
-- [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate`
-      are read). Measured victim on the hero: `head-turn` flips the head with
-      a `stepped` scale key (x=-1) — the flip never reaches the converted rig
-      and its children mirror to the wrong side (hair01 worldY sign flip,
-      122-unit deviation). Rigs that animate scale deviate
 - [ ] A `skin: true` path constraint does not survive the round trip. Under a
       skin that does not equip it, the source runtime leaves the constraint's
       bones inactive at (0,0); the converted rig drops the constraint, so those
@@ -89,16 +101,31 @@
 
 ### Godot side
 
-- [ ] Mesh deformation tracks (per-vertex animation from `Polygon2D`)
-- [ ] `SkeletonModification2D` stacks (IK, jiggle, look-at) — bake before converting
-- [ ] Export to Godot `.tres` resource (alternative to `.tscn`)
+- [ ] Mesh deformation tracks (per-vertex animation from `Polygon2D`) —
+      BLOCKED ON DATA: no qualified Godot sample animates a `polygon` /
+      `internal_vertex_count` track, so there is nothing to compare against
+- [ ] `SkeletonModification2D` stacks (IK, jiggle, look-at) — bake before
+      converting. The pattern is real in the corpus (gdquest goblin, papereaven
+      player/level scenes), but verification needs the modification's own solver
+      run in-engine per frame; the existing pose probe samples one seek, so the
+      harness grows before the converter does
+- [x] ~~Export to Godot `.tres` resource~~ — DONE: `src/out_tres.py` +
+      `--to tres` writes an `AnimationLibrary` resource per rig (animations plus
+      the bone list as metadata); verified by loading it in headless Godot 4.7.1,
+      not only by parsing
 
 ### Spine side
 
-- [ ] Sequences support
-- [ ] `noScale` / `noScaleOrReflection` inherit modes (currently fall back to
+- [ ] Sequences support — BLOCKED ON DATA: zero attachments with a `sequence`
+      key across the 24 Spine JSONs in the local corpora, so there is nothing to
+      verify a converter against
+- [ ] `noScale` / `noScaleOrReflection` inherit modes — BLOCKED ON DATA: no
+      bone in the local corpora declares either mode. (See the item below about
+      what it falls back to today:)
       normal inheritance)
-- [ ] JSON → `.skel` binary writer
+- [ ] JSON → `.skel` binary writer — reachable with a real verification path:
+      the pinned runtime ships `SkeletonBinary.js`, so a written `.skel` can be
+      loaded by the same runtime the numeric gates already use
 
 ### DragonBones
 
@@ -113,6 +140,8 @@
 ### Distribution
 
 - [ ] Godot editor plugin (right-click `.tscn` → export to Spine)
-- [ ] PyPI package (`pip install skeleton-converter`)
+- [x] ~~PyPI package~~ — DONE: `pyproject.toml` (PEP 621, stdlib-only, console
+      script `skeleton-converter`); verified by building a wheel, installing it
+      in a throwaway venv and running a real conversion from the installed copy
 - [x] CI: GitHub Actions running the fixture-free suite on Python 3.10-3.13
       (`.github/workflows/tests.yml`)

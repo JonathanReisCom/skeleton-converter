@@ -20,6 +20,24 @@ Godot `Animation` keys hold **absolute** local transforms; Spine `rotate` and
 `translate` keys are **offsets from the setup pose**. Converting Godot→Spine
 subtracts the bone's setup value; Spine→Godot adds it back.
 
+## Attachment timelines
+
+The runtime draws a slot's **setup attachment** until a timeline key applies;
+after that, whichever entry the timeline names (`None` hides the slot). The
+Godot leg mirrors this with one discrete boolean `visible` track per entry
+node and a static `visible` equal to `setup` — never to "drawn at some point",
+or a comparison frame before the first key shows a prop the runtime hides. A
+timeline starting after `t=0` needs a synthetic `t=0` key holding the setup
+state, because Godot holds a value track's first key backwards. Sampling
+exactly on a key time can differ by one sample: Godot applies the key at its
+time, the runtime strictly after it.
+
+## Scale timelines
+
+Absolute local scale in both spaces, no mirroring; a Spine key without `x`/`y`
+means 1. Emitted as `:scale` value tracks (Vector2) or per-axis `:scale:x` /
+`:scale:y` bezier tracks, and read back through the same union.
+
 ## UV spaces
 
 Godot stores attachment UVs in **texture pixels**; Spine mesh `uvs` are
@@ -60,6 +78,18 @@ Godot skins with `accum · rest.inverse()`. The engine's own scenes are the
 reference (`rest = Transform2D(0.3366, 0.9416, -0.9416, 0.3366, ...)` for a
 70.3° bone). In `.tscn` files the constructor argument order is
 `(x.x, x.y, y.x, y.y, o.x, o.y)` — transposed relative to standard row-major.
+
+## Bone rest vs node pose
+
+Godot binds skinned meshes to the Bone2D **`rest`** property, which can differ
+from the node pose (rests with identity rotations while node rotations carry
+the rig's angles). Mesh locals must be stored against the **global rest
+chain**, not the node-pose worlds — using the setup bakes each bone's setup
+rotation into the mesh and reads as a permanently tilted limb while the bone
+numbers all check out. `rest` is not representable in Spine's own format, so
+it survives the round trip as Godot-value extension fields on each bone
+(`restX/restY/restRotation/restScaleX/restScaleY`); real Spine runtimes ignore
+unknown keys.
 
 ## Region quads and atlas
 
