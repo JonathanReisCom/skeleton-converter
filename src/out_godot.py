@@ -114,10 +114,10 @@ def _emit_bones(model, world):
 def _emit_attachments(model, world, texture_path):
     polygon_nodes = []
     for att in model.attachments:
-        polygon = att["polygon"]
-        uv = att["uv"]
-        weights = att["weights"]
-        offset = att["position"]
+        polygon = att.polygon
+        uv = att.uv
+        weights = att.weights
+        offset = att.position
 
         # Vertices are node-local and the node carries the attachment's
         # position — exactly the structure the source scene had (Godot applies
@@ -126,7 +126,7 @@ def _emit_attachments(model, world, texture_path):
 
         uv_points = [[v[0], v[1]] for v in uv]
 
-        node_pos = att.get("position", (0.0, 0.0))
+        node_pos = att.position
         props = [
             f"position = Vector2({round(node_pos[0], 6)}, {round(node_pos[1], 6)})",
             f'texture = ExtResource("1")',
@@ -138,8 +138,8 @@ def _emit_attachments(model, world, texture_path):
                 f"{round(v, 6)}" for point in uv_points for v in point
             ),
         ]
-        if att.get("polygons"):
-            groups = att["polygons"]
+        if att.polygons:
+            groups = att.polygons
             if groups and isinstance(groups[0], int):
                 # Flat triangle index list (spine `triangles`): emit ONE GROUP
                 # PER TRIANGLE. Godot fan-triangulates each PackedInt32Array as
@@ -187,7 +187,7 @@ def _emit_attachments(model, world, texture_path):
             props.append("bones = [%s]" % ", ".join(parts))
 
         polygon_nodes.append({
-            "name": att["name"].capitalize(), "type": "Polygon2D",
+            "name": att.name.capitalize(), "type": "Polygon2D",
             "parent": "Sprite2D/Polygons", "props": props,
         })
     return polygon_nodes
@@ -230,7 +230,7 @@ def _solve_handles(keys, times, spine_values, mirror: bool, axis: int = 0) -> tu
     out_h = [(0.0, 0.0)] * n
     in_h = [(0.0, 0.0)] * n
     for i in range(n - 1):
-        curve = keys[i].get("curve")
+        curve = keys[i].curve
         if isinstance(curve, (list, tuple)) and len(curve) >= 8:
             curve = curve[axis * 4:(axis + 1) * 4]
         out, inn = _segment_handles(
@@ -272,40 +272,40 @@ def _emit_animations(model):
             if props.get("rotate"):
                 keys = props["rotate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}"
-                if any(k.get("curve") for k in keys):
+                if any(k.curve for k in keys):
                     # Handle computation needs the key's value in spine offset
                     # space (where CurveTimeline control points live):
                     # angle = -(setup_spine + offset) and rotation_deg =
                     # -setup_spine, so offset = -angle + rotation_deg.
-                    spine_values = [-k["angle"] + setup_rot for k in keys]
-                    times = [k["time"] for k in keys]
+                    spine_values = [-k.angle + setup_rot for k in keys]
+                    times = [k.time for k in keys]
                     out_h, in_h = _solve_handles(keys, times, spine_values, True)
                     tracks.append(("bezier", f"{base}:rotation_degrees",
-                                   times, [k["angle"] for k in keys],
+                                   times, [k.angle for k in keys],
                                    out_h, in_h))
                 else:
                     tracks.append(("value", f"{base}:rotation_degrees",
-                                   [(k["time"], k["angle"]) for k in keys]))
+                                   [(k.time, k.angle) for k in keys]))
             if props.get("translate"):
                 keys = props["translate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}:position"
-                if any(k.get("curve") for k in keys):
+                if any(k.curve for k in keys):
                     # x: spine = kx - setup_x; y mirrors: spine = -ky - setup_y.
                     # x: godot = spine + setup_x; y mirrors, so offset_y =
                     # -ky - setup_y_spine = -ky + position[1].
                     for axis, to_spine in (
-                            (0, lambda k: k["x"] - setup_pos[0]),
-                            (1, lambda k: -k["y"] + setup_pos[1])):
+                            (0, lambda k: k.x - setup_pos[0]),
+                            (1, lambda k: -k.y + setup_pos[1])):
                         spine_values = [to_spine(k) for k in keys]
-                        times = [k["time"] for k in keys]
+                        times = [k.time for k in keys]
                         out_h, in_h = _solve_handles(keys, times, spine_values,
                                                      axis == 1, axis=axis)
                         tracks.append(("bezier", f"{base}:{'xy'[axis]}",
-                                       times, [k["x" if axis == 0 else "y"] for k in keys],
+                                       times, [k.x if axis == 0 else k.y for k in keys],
                                        out_h, in_h))
                 else:
                     tracks.append(("value", base,
-                                   [(k["time"], (k["x"], k["y"])) for k in keys]))
+                                   [(k.time, (k.x, k.y)) for k in keys]))
         lines = [f'[sub_resource type="Animation" id="{resource_id}"]']
         length = 0.0
         for track in tracks:

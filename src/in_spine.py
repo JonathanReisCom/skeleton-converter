@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 
 from .model import (
-    Attachment, Bone, Skeleton,
+    Attachment, Bone, Key, Skeleton,
     compose, invert, mirror_matrix, mirror_point, multiply, transform,
     spine_world_transforms,
 )
@@ -334,20 +334,18 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         anchor_world = world.get(anchor, (1, 0, 0, 1, 0, 0))
         # spine world is y-up; the Godot node position is y-down — mirror it.
         node_pos = (anchor_world[4], -anchor_world[5])
-        model.attachments.append({
-            "name": slot_name.lower(),
-            "polygon": [(p[0] - anchor_world[4], -(p[1] - anchor_world[5]))
-                        for p in world_points],
-            "uv": uv_points,
-            "polygons": triangles,
-            "weights": [
+        model.attachments.append(Attachment(
+            name=slot_name.lower(),
+            polygon=[(p[0] - anchor_world[4], -(p[1] - anchor_world[5]))
+                     for p in world_points],
+            uv=uv_points,
+            polygons=triangles,
+            weights=[
                 (bn, [vw.get(i, 0.0) for i in range(len(world_points))])
                 for bn, vw in weights_by_bone.items()
             ],
-            "position": [node_pos[0], node_pos[1]],
-            "offset": (0.0, 0.0),
-            "internal_vertices": 0,
-        })
+            position=(node_pos[0], node_pos[1]),
+        ))
 
     # ---- animations: Spine offsets → Godot absolute values
     # Constraints are baked first: Godot has no IK/path constraints, so the
@@ -369,19 +367,21 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             setup_pos = (setup.get("x", 0.0), setup.get("y", 0.0))
             if props.get("rotate"):
                 tracks.setdefault(bone_name, {})["rotate"] = [
-                    {"time": k.get("time", 0.0), "angle": -(setup_rot + k.get("value", 0.0)),
-                     # Curve stays in spine space (absolute time/value control
-                     # points, per CurveTimeline.setBezier). Each writer maps
-                     # it to its own interpolation; see out_godot.
-                     **({"curve": k["curve"]} if k.get("curve") is not None else {})}
+                    Key(time=k.get("time", 0.0),
+                        angle=-(setup_rot + k.get("value", 0.0)),
+                        # Curve stays in spine space (absolute time/value
+                        # control points, per CurveTimeline.setBezier). Each
+                        # writer maps it to its own interpolation; see
+                        # out_godot.
+                        curve=k.get("curve"))
                     for k in props["rotate"]
                 ]
             if props.get("translate"):
                 tracks.setdefault(bone_name, {})["translate"] = [
-                    {"time": k.get("time", 0.0),
-                     "x": setup_pos[0] + k.get("x", 0.0),
-                     "y": -(setup_pos[1] + k.get("y", 0.0)),
-                     **({"curve": k["curve"]} if k.get("curve") is not None else {})}
+                    Key(time=k.get("time", 0.0),
+                        x=setup_pos[0] + k.get("x", 0.0),
+                        y=-(setup_pos[1] + k.get("y", 0.0)),
+                        curve=k.get("curve"))
                     for k in props["translate"]
                 ]
         model.animations[anim_name] = tracks

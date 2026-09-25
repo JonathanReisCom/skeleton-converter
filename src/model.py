@@ -163,11 +163,34 @@ class Attachment:
 
 
 @dataclass
+class Key:
+    """One animation key in canonical (Godot-space absolute) values.
+
+    ``angle`` is a rotate-key value in degrees (Godot rotation_degrees);
+    ``x``/``y`` are translate-key values in Godot units (Y-down). Exactly one
+    of those value groups is meaningful depending on the owning track kind.
+    ``curve`` holds the spine-space bezier control points for the segment
+    starting at this key — ``[x1, y1, x2, y2]`` for rotate, ``[cx1, cy1,
+    cx2, cy2, cx3, cy3, cx4, cy4]`` for translate (time axis first, then one
+    value axis per Godot value axis; see ``bezier_table_point``). Spine space
+    is the curve's native space (CurveTimeline control points are absolute
+    time/value in spine offsets); each writer maps it to its own
+    interpolation value space.
+    """
+    time: float
+    angle: float = 0.0
+    x: float = 0.0
+    y: float = 0.0
+    curve: tuple | None = None
+
+
+@dataclass
 class Skeleton:
     """The canonical rig: bones in parent-before-child order, attachments, animations."""
     bones: list = field(default_factory=list)        # list[Bone], parents before children
-    attachments: list = field(default_factory=list)  # list[dict]
-    animations: dict = field(default_factory=dict)   # name -> {bone: {rotate/translate: [...]}}
+    attachments: list = field(default_factory=list)  # list[Attachment]
+    # name -> {bone_name: {"rotate": list[Key] | "translate": list[Key]}}
+    animations: dict = field(default_factory=dict)
     texture_path: str = ""                           # res:// path from the source scene
     by_name: dict = field(default_factory=dict)      # bone name → Bone, populated by readers
     # Facts the reader learned that the caller should report rather than

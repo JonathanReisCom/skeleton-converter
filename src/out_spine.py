@@ -69,14 +69,14 @@ def render_atlas(model: Skeleton, image_name: str, image_path: str | None = None
     width, height = size if size else (1024, 1024)
     lines = [image_name, f"\tsize: {width}, {height}", "\tfilter: Linear, Linear"]
     for att in model.attachments:
-        uv = att["uv"]
+        uv = att.uv
         if not uv:
             continue
         min_x = min(p[0] for p in uv)
         min_y = min(p[1] for p in uv)
         span_x = (max(p[0] for p in uv) - min_x) or 1.0
         span_y = (max(p[1] for p in uv) - min_y) or 1.0
-        lines.append(att["name"])
+        lines.append(att.name)
         lines.append("\tbounds: %d, %d, %d, %d" % (
             int(round(min_x)), int(round(min_y)),
             int(round(span_x)), int(round(span_y)),
@@ -255,15 +255,15 @@ def write_spine_json(model: Skeleton, output_path: str,
         spine["bones"].append(entry)
 
     for att in model.attachments:
-        polygon = att["polygon"]
-        uv = att["uv"]
-        weights = att["weights"]
+        polygon = att.polygon
+        uv = att.uv
+        weights = att.weights
         if not uv or not polygon:
             # A path (or other non-rendered) attachment has no UVs and cannot
             # be written as a mesh; writing it would crash or draw garbage.
-            model.notes.append(f"preview: skipped attachment {att['name']!r} (no UVs)")
+            model.notes.append(f"preview: skipped attachment {att.name!r} (no UVs)")
             continue
-        polygon_world = compose(att["position"], 0.0)
+        polygon_world = compose(att.position, 0.0)
         uv_min_x = min(p[0] for p in uv)
         uv_min_y = min(p[1] for p in uv)
         span_x = (max(p[0] for p in uv) - uv_min_x) or 1.0
@@ -279,7 +279,7 @@ def write_spine_json(model: Skeleton, output_path: str,
         entry = {
             "type": "mesh",
             "uvs": [],
-            "triangles": triangulate(att["polygons"], len(polygon)),
+            "triangles": triangulate(att.polygons, len(polygon)),
             "width": round(span_x, 4),
             "height": round(span_y, 4),
         }
@@ -313,7 +313,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                           for bone_name, transform_matrix in godot_rest_worlds(model).items()}
             for vertex_index, vertex in enumerate(polygon):
                 world_point = transform(
-                    polygon_world, (vertex[0] + att["offset"][0], vertex[1] + att["offset"][1])
+                    polygon_world, (vertex[0] + att.offset[0], vertex[1] + att.offset[1])
                 )
                 spine_point = mirror_point(world_point)
                 entries = []
@@ -342,16 +342,16 @@ def write_spine_json(model: Skeleton, output_path: str,
                 round(v, 4) for vertex in polygon
                 for v in mirror_point(transform(
                     polygon_world,
-                    (vertex[0] + att["offset"][0], vertex[1] + att["offset"][1]),
+                    (vertex[0] + att.offset[0], vertex[1] + att.offset[1]),
                 ))
             ]
 
         spine["slots"].append({
-            "name": att["name"],
+            "name": att.name,
             "bone": host,
-            "attachment": att["name"],
+            "attachment": att.name,
         })
-        spine["skins"][0]["attachments"].setdefault(att["name"], {})[att["name"]] = entry
+        spine["skins"][0]["attachments"].setdefault(att.name, {})[att.name] = entry
 
     for anim_name, tracks in model.animations.items():
         animation = {"bones": {}}
@@ -374,8 +374,6 @@ def write_spine_json(model: Skeleton, output_path: str,
                     return keys
                 out = list(keys)
                 if out[0]["time"] > 0.0:
-                    def _val(key, field):
-                        return key.get(field, 0.0) if field != "value" else key["value"]
                     k1, k2 = out[0], out[1] if len(out) > 1 else out[0]
                     first = dict(k1)
                     first["time"] = 0.0
@@ -387,7 +385,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                                 if field in k1 and field in k2:
                                     slope = (k2[field] - k1[field]) / span
                                     first[field] = round(
-                                        _val(k1, field) + slope * (t1 - 0.0), 6)
+                                        k1[field] + slope * (t1 - 0.0), 6)
                     first.pop("curve", None)
                     out.insert(0, first)
                 return out
@@ -395,18 +393,21 @@ def write_spine_json(model: Skeleton, output_path: str,
             if props.get("rotate"):
                 setup_rotation = bone.rotation_deg if bone else 0.0
                 bone_tracks["rotate"] = _clamp_first_last([
-                    {"time": round(k["time"], 6), "value": round(-(k["angle"] - setup_rotation), 6),
-                     **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {})}
+                    {"time": round(k.time, 6),
+                     "value": round(-(k.angle - setup_rotation), 6),
+                     **({"curve": [round(c, 6) for c in k.curve]}
+                        if k.curve else {})}
                     for k in props["rotate"]
                 ], "value")
             if props.get("translate"):
                 setup_position = bone.position if bone else (0.0, 0.0)
                 bone_tracks["translate"] = _clamp_first_last([
                     {
-                        "time": round(k["time"], 6),
-                        "x": round(k["x"] - setup_position[0], 6),
-                        "y": round(-(k["y"] - setup_position[1]), 6),
-                        **({"curve": [round(c, 6) for c in k["curve"]]} if k.get("curve") else {}),
+                        "time": round(k.time, 6),
+                        "x": round(k.x - setup_position[0], 6),
+                        "y": round(-(k.y - setup_position[1]), 6),
+                        **({"curve": [round(c, 6) for c in k.curve]}
+                           if k.curve else {}),
                     }
                     for k in props["translate"]
                 ], "value")
@@ -422,11 +423,11 @@ def write_spine_json(model: Skeleton, output_path: str,
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
     for att in model.attachments:
-        poly_world = world.get(att["name"]) or (world.get(model.bones[0].name) if model.bones else None)
+        poly_world = world.get(att.name) or (world.get(model.bones[0].name) if model.bones else None)
         if not poly_world:
             continue
-        for v in att["polygon"]:
-            p = transform(poly_world, (v[0] + att["offset"][0], v[1] + att["offset"][1]))
+        for v in att.polygon:
+            p = transform(poly_world, (v[0] + att.offset[0], v[1] + att.offset[1]))
             min_x = min(min_x, p[0]); max_x = max(max_x, p[0])
             min_y = min(min_y, p[1]); max_y = max(max_y, p[1])
     if min_x <= max_x:

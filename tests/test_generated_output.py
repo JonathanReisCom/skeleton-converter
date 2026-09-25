@@ -12,7 +12,7 @@ import math
 import re
 
 from src.in_godot import read_godot_skeleton
-from src.model import Bone, Skeleton
+from src.model import Attachment, Bone, Key, Skeleton
 from src.out_godot import write_godot_scene
 from src.out_spine import write_spine_json
 
@@ -33,7 +33,7 @@ def _rig() -> Skeleton:
     # A hyphen and a space: both invalid in a Godot sub_resource id.
     model.animations = {
         "walk-cycle": {"arm": {"rotate": [
-            {"time": 0.0, "angle": 30.0}, {"time": 1.0, "angle": 90.0},
+            Key(time=0.0, angle=30.0), Key(time=1.0, angle=90.0),
         ]}},
     }
     return model
@@ -123,14 +123,14 @@ def test_bezier_curves_survive_the_godot_leg(tmp_path):
         "a": {"arm": {
             # rotate: curve control points are absolute spine offsets.
             "rotate": [
-                {"time": 0.0, "angle": -10.0, "curve": [0.15, 5.0, 0.35, 25.0]},
-                {"time": 1.0, "angle": -40.0},
+                Key(time=0.0, angle=-10.0, curve=[0.15, 5.0, 0.35, 25.0]),
+                Key(time=1.0, angle=-40.0),
             ],
             # translate: 8-float curve = [x1,y1,x2,y2] per segment.
             "translate": [
-                {"time": 0.0, "x": 10.0, "y": 0.0,
-                 "curve": [0.15, 5.0, 0.35, 25.0, 0.2, -1.0, 0.4, -3.0]},
-                {"time": 1.0, "x": 40.0, "y": -30.0},
+                Key(time=0.0, x=10.0, y=0.0,
+                    curve=[0.15, 5.0, 0.35, 25.0, 0.2, -1.0, 0.4, -3.0]),
+                Key(time=1.0, x=40.0, y=-30.0),
             ],
         }},
     }
@@ -151,11 +151,11 @@ def test_bezier_curves_survive_the_godot_leg(tmp_path):
     # absolute model-space angles, so compare against the offsets instead.
     assert math.isclose(back["rotate"][0]["value"], 40.0, abs_tol=1e-6), back["rotate"][0]
     got = back["rotate"][0]["curve"]
-    want = model.animations["a"]["arm"]["rotate"][0]["curve"]
+    want = model.animations["a"]["arm"]["rotate"][0].curve
     assert all(math.isclose(x, y, abs_tol=1e-6) for x, y in zip(want, got)), \
         f"rotate curve changed: {want} -> {got}"
     got = back["translate"][0]["curve"]
-    want = model.animations["a"]["arm"]["translate"][0]["curve"]
+    want = model.animations["a"]["arm"]["translate"][0].curve
     assert len(got) == 8 and all(
         math.isclose(x, y, abs_tol=1e-6) for x, y in zip(want, got)
     ), f"translate curve changed: {want} -> {got}"
@@ -177,16 +177,13 @@ def test_skinned_polygon_format_matches_what_godot_renders(tmp_path):
     """
     model = _rig()
     # Weighted mesh: 4 verts, one influencing bone with weight 1.
-    model.attachments.append({
-        "name": "plate",
-        "polygon": [(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)],
-        "uv": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
-        "polygons": [0, 1, 2, 0, 2, 3],
-        "weights": [("arm", [1.0, 1.0, 1.0, 1.0])],
-        "position": (0.0, 0.0),
-        "offset": (0.0, 0.0),
-        "internal_vertices": 0,
-    })
+    model.attachments.append(Attachment(
+        name="plate",
+        polygon=[(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)],
+        uv=[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+        polygons=[0, 1, 2, 0, 2, 3],
+        weights=[("arm", [1.0, 1.0, 1.0, 1.0])],
+    ))
     scene = tmp_path / "rig.tscn"
     write_godot_scene(model, str(scene), texture_path="res://rig.png")
     text = scene.read_text()

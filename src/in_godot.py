@@ -6,7 +6,7 @@ import math
 import re
 from pathlib import Path
 
-from .model import Attachment, Bone, Skeleton, spine_inverse
+from .model import Attachment, Bone, Key, Skeleton, spine_inverse
 
 # ---------------------------------------------------------------------------
 # .tscn text parsing
@@ -263,7 +263,8 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
                 times, keys.get("points", []), model, bone_name, "rotate")
         elif bone_name and property_name == "rotation_degrees":
             tracks.setdefault(bone_name, {})["rotate"] = [
-                {"time": float(t), "angle": float(v)} for t, v in zip(times, values)
+                Key(time=float(t), angle=float(v))
+                for t, v in zip(times, values)
             ]
         elif bone_name and property_name.startswith("position") and track_type == "bezier":
             axis = "x" if property_name.endswith(":x") else "y"
@@ -275,7 +276,7 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
                 existing, axis_keys, axis)
         elif bone_name and property_name == "position":
             tracks.setdefault(bone_name, {})["translate"] = [
-                {"time": float(t), "x": float(v[0]), "y": float(v[1])}
+                Key(time=float(t), x=float(v[0]), y=float(v[1]))
                 for t, v in zip(times, values) if isinstance(v, list)
             ]
         index += 1
@@ -299,14 +300,16 @@ def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
     out_h = [(points[i * 5 + 3], points[i * 5 + 4]) for i in range(n)]
     keys = []
     for i in range(n):
-        key = {"time": float(times[i]),
-               "angle" if kind == "rotate" else axis: float(values[i])}
+        if kind == "rotate":
+            key = Key(time=float(times[i]), angle=float(values[i]))
+        else:
+            key = Key(time=float(times[i]), **{axis: float(values[i])})
         if i < n - 1:
             cx1 = times[i] + out_h[i][0]
             cy1 = to_spine(values[i] + out_h[i][1])
             cx2 = times[i + 1] + in_h[i + 1][0]
             cy2 = to_spine(values[i + 1] + in_h[i + 1][1])
-            key["curve"] = [cx1, cy1, cx2, cy2]
+            key.curve = [cx1, cy1, cx2, cy2]
         keys.append(key)
     return keys
 
@@ -322,24 +325,24 @@ def _merge_axis(existing: list | None, axis_keys: list, axis: str) -> list:
         return axis_keys
     out = []
     for i, (k0, k1) in enumerate(zip(existing, axis_keys)):
-        merged = dict(k0)
-        merged[axis] = k1[axis]
         # ``existing`` holds whichever axis arrived first; the current axis's
         # curve lives on k1, the other axis's on k0. Curve layout is
         # [x1, y1, x2, y2] (readCurve indexes value<<2), so x first, y second.
         x_key, y_key = (k1, k0) if axis == "x" else (k0, k1)
-        curve_x = x_key.get("curve") or []
-        curve_y = y_key.get("curve") or []
+        curve_x = x_key.curve or []
+        curve_y = y_key.curve or []
         # A straight fallback for the axis without its own bezier track:
         # controls 1/3 and 2/3 along the straight line between its key values.
         other = "y" if axis == "x" else "x"
         if i + 1 < len(existing):
-            v0, v1 = existing[i][other], existing[i + 1][other]
+            v0, v1 = getattr(existing[i], other), getattr(existing[i + 1], other)
         else:
-            v0 = v1 = k0.get(other, 0.0)
-        dt = k1["time"] - k0["time"]
-        straight = [k0["time"] + dt / 3.0, v0, k1["time"] - dt / 3.0, v1]
-        merged["curve"] = list(curve_x or straight) + list(curve_y or straight)
+            v0 = v1 = getattr(k0, other)
+        dt = k1.time - k0.time
+        straight = [k0.time + dt / 3.0, v0, k1.time - dt / 3.0, v1]
+        merged = Key(time=k0.time, curve=list(curve_x or straight) + list(curve_y or straight))
+        setattr(merged, axis, getattr(k1, axis))
+        setattr(merged, other, getattr(k0, other))
         out.append(merged)
     return out
 
@@ -435,18 +438,18 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         dense_list = [(bone_name, [dense[bone_name].get(i, 0.0)
                                    for i in range(vertex_count)])
                       for bone_name in sorted(dense)]
-        model.attachments.append({
-            "name": path.rsplit("/", 1)[-1].lower().replace(" ", "-"),
-            "polygon": polygon,
-            "uv": props.get("uv") or polygon,
-            "polygons": props.get("polygons", []),
-            "weights": dense_list,
-            "position": position,
+        model.attachments.append(Attachment(
+            name=path.rsplit("/", 1)[-1].lower().replace(" ", "-"),
+            polygon=polygon,
+            uv=props.get("uv") or polygon,
+            polygons=props.get("polygons", []),
+            weights=dense_list,
+            position=position,
             # Native grammar: world = nodeTransform * (vertex + offset).
             # out_spine composes both when writing the JSON.
-            "offset": props.get("offset", [0.0, 0.0]),
-            "internal_vertices": props.get("internal_vertex_count", 0),
-        })
+            offset=tuple(props.get("offset", [0.0, 0.0])),
+            internal_vertices=props.get("internal_vertex_count", 0),
+        ))
 
     library = next(
         (s for s in scene["sub_resources"].values() if s["type"] == "AnimationLibrary"), None

@@ -38,13 +38,18 @@ format. Adding a format means writing two adapters, not N² converters.
 
 ```
 src/
-├── model.py       # canonical model + FK (forward kinematics) + inherit modes
+├── model.py       # canonical model + FK (forward kinematics) + inherit modes;
+│                  # animation keys are typed (model.Key) in Godot-space
+│                  # absolute values, attachments are model.Attachment
 ├── in_godot.py    # .tscn reader → model
 ├── in_spine.py    # Spine JSON reader → model
 ├── out_godot.py   # model → .tscn writer
 ├── out_spine.py   # model → Spine JSON writer
 ├── registry.py    # format detection, convert dispatch
-└── cli.py         # command-line interface
+├── bundle.py      # output-bundle seam: convert/compare/view, atlas+texture
+│                  # resolution, bundle assembly; the CLI is a thin parser
+│                  # over it, the validation harness bypasses it (registry)
+├── cli.py         # command-line interface (argparse over bundle.py)
 ```
 
 ### Rule: no format-specific logic outside the adapters
