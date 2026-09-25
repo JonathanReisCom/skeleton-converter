@@ -133,8 +133,8 @@ compare:
 	  echo "error: COMPARE_GODOT has no index.html: $(COMPARE_GODOT)"; exit 1; }
 	@test -f "$(COMPARE_SPINE)/index.html" || { \
 	  echo "error: COMPARE_SPINE has no index.html: $(COMPARE_SPINE)"; exit 1; }
-	@$(PYTHON) -c "from src.compare_out import emit_compare; \
-emit_compare('$(COMPARE_GODOT)', '$(COMPARE_SPINE)')"
+	@$(PYTHON) -c "from src.bundle import compare_page; \
+compare_page('$(COMPARE_GODOT)', '$(COMPARE_SPINE)')"
 	@echo "--> compare page: http://localhost:$(COMPARE_PORT)/compare.html  (Ctrl+C stops)"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(COMPARE_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(COMPARE_PORT) already in use — a previous server is probably still up; open the URL above"; \

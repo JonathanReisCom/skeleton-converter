@@ -29,13 +29,22 @@
 ### Known gaps
 
 - [ ] Spine `scale` animation tracks are dropped (only `rotate`/`translate` are
-      read), so rigs that animate scale deviate from the source
+      read). Measured victim on the hero: `head-turn` flips the head with a
+      `stepped` scale key (x=-1) — the flip never reaches the converted rig
+      and its children mirror to the wrong side (hair01 worldY sign flip,
+      122-unit deviation). Rigs that animate scale deviate
 - [ ] Transform and physics constraints are not baked (IK and path are) — see
       `unsupported_constraints()`; the bones they drive keep their animated
       values
 - [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
       bone along a chain (~0.42 after four), independent of constraints. It
       predates the constraint work and is the largest remaining error source
+- [ ] A native Godot scene's `Sprite2D` position offset is not representable
+      in Spine (which has no scene-level offset — only bones). Measured victim:
+      the official hero demo's `Sprite2D.position = (0, -15)`; the converted
+      Spine rig sits ~15 units higher than the original in side-by-side
+      previews. Fix shape: emit a root bone carrying the offset (changes the
+      bone count, breaking one-to-one bone comparisons)
 - [x] ~~Bezier curves do not survive the Godot leg~~ — FIXED: `out_godot`
       emits `TYPE_BEZIER` tracks (points = [value, in_t, in_v, out_t, out_v]
       per key, handles offset from their key) and `in_godot` rebuilds the

@@ -218,3 +218,11 @@ def view(skeleton_json: str) -> Path:
         str(Path(skeleton_json).with_name("index.html")),
         skeleton_json_path=skeleton_json,
     ))
+
+
+def compare_page(godot_dir: str, spine_dir: str) -> Path:
+    """Write compare.html into the parent of both preview bundles (one HTML
+    page, both bundles in iframes with shared play/freeze controls); return
+    its path. Serve the parent folder with any static server."""
+    from .compare_out import emit_compare
+    return Path(emit_compare(Path(godot_dir), Path(spine_dir)))
