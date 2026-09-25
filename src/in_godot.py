@@ -247,6 +247,7 @@ def parse_polygon_weights(raw) -> list:
 def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = None) -> dict:
     props = animation["props"]
     tracks = {}
+    visible_tracks: dict = {}
     index = 0
     while f"tracks/{index}/type" in props:
         track_type = str(props.get(f"tracks/{index}/type", "value"))
@@ -280,8 +281,62 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
                 Key(time=float(t), x=float(v[0]), y=float(v[1]))
                 for t, v in zip(times, values) if isinstance(v, list)
             ]
+        elif bone_name and property_name.startswith("scale") and track_type == "bezier":
+            axis = "x" if property_name.endswith(":x") else "y"
+            axis_keys = _bezier_keys(
+                times, keys.get("points", []), model, bone_name, "scale",
+                axis=axis)
+            existing = tracks.get(bone_name, {}).get("scale")
+            tracks.setdefault(bone_name, {})["scale"] = _merge_scale_axis(
+                existing, axis_keys, axis)
+        elif bone_name and property_name == "scale":
+            tracks.setdefault(bone_name, {})["scale"] = [
+                Key(time=float(t), scale=(float(v[0]), float(v[1])))
+                for t, v in zip(times, values) if isinstance(v, list)
+            ]
+        elif property_name == "visible" and "/Polygons/" in node_path_value:
+            # Attachment timeline: one boolean track per Polygon2D; the slot's
+            # drawn attachment at each key time is whichever node is visible.
+            node_name = node_path_value.rsplit("/", 1)[-1]
+            visible_tracks.setdefault(node_name, []).extend(
+                (float(t), bool(v)) for t, v in zip(times, values))
         index += 1
-    return tracks
+    return tracks, visible_tracks
+
+
+def _slot_timelines(visible_tracks: dict, node_attachments: dict) -> dict:
+    """Polygon2D ``visible`` tracks -> {slot: [{time, attachment}]}.
+
+    The Godot leg animates visibility per attachment node (that is what the
+    runtime's setAttachment does); the canonical model stores the choice per
+    slot, so the nodes of one slot are folded into a single timeline whose
+    attachment is the node visible at that time (None = the slot draws
+    nothing).
+    """
+    if not visible_tracks:
+        return {}
+    by_slot: dict = {}
+    for node_name, keys in visible_tracks.items():
+        att = node_attachments.get(node_name)
+        slot = (att.slot or att.name) if att else node_name
+        by_slot.setdefault(slot, {})[node_name] = dict(keys)
+    timelines = {}
+    for slot, nodes in by_slot.items():
+        times = sorted({t for keys in nodes.values() for t in keys})
+        entries = []
+        for time in times:
+            chosen = None
+            for node_name, keys in nodes.items():
+                if keys.get(time):
+                    # The attachment's real name, not the node's: node names
+                    # are deduplicated and character-substituted, so a leaked
+                    # node name re-emits as `splat03_2` in the Spine JSON.
+                    att = node_attachments.get(node_name)
+                    chosen = att.name if att else node_name
+                    break
+            entries.append({"time": time, "attachment": chosen})
+        timelines[slot] = entries
+    return timelines
 
 
 def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
@@ -303,6 +358,12 @@ def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
     for i in range(n):
         if kind == "rotate":
             key = Key(time=float(times[i]), angle=float(values[i]))
+        elif kind == "scale":
+            # A per-axis scale track carries one component; the merge folds
+            # the second axis in. Both slots start at this axis's value so the
+            # component the merge keeps from `existing` is always well defined.
+            key = Key(time=float(times[i]),
+                      scale=(float(values[i]), float(values[i])))
         else:
             key = Key(time=float(times[i]), **{axis: float(values[i])})
         if i < n - 1:
@@ -345,6 +406,33 @@ def _merge_axis(existing: list | None, axis_keys: list, axis: str) -> list:
         setattr(merged, axis, getattr(k1, axis))
         setattr(merged, other, getattr(k0, other))
         out.append(merged)
+    return out
+
+
+def _merge_scale_axis(existing: list | None, axis_keys: list, axis: str) -> list:
+    """Merge one bezier axis into the combined scale channel.
+
+    The scale analogue of ``_merge_axis``: the value is a ``(sx, sy)`` tuple
+    instead of two named fields, so the two axes have to be folded together
+    here rather than by ``setattr``.
+    """
+    if existing is None:
+        return axis_keys
+    out = []
+    factor = 0 if axis == "x" else 1
+    other = 1 - factor
+    for i, (k0, k1) in enumerate(zip(existing, axis_keys)):
+        curve_axis = k1.curve or []
+        curve_other = k0.curve or []
+        v0 = k0.scale[other]
+        v1 = existing[i + 1].scale[other] if i + 1 < len(existing) else v0
+        dt = k1.time - k0.time
+        straight = [k0.time + dt / 3.0, v0, k1.time - dt / 3.0, v1]
+        merged_curve = list(curve_axis or straight) + list(curve_other or straight)
+        values = [k0.scale[0], k0.scale[1]]
+        values[factor] = k1.scale[factor]
+        out.append(Key(time=k0.time, scale=(values[0], values[1]),
+                       curve=merged_curve))
     return out
 
 
@@ -420,6 +508,9 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
     # the JSON, and out_godot re-emits position + local vertices, so the
     # round trip reproduces the source scene exactly.
     polygons_path = skeleton_path.rsplit("/", 1)[0] + "/Polygons"
+    # Polygon2D node name -> the Attachment read from it: the visibility tracks
+    # address nodes by name, while the attachment carries the skin entry name.
+    node_attachments: dict = {}
     for path, node in by_path.items():
         if node["type"] != "Polygon2D" or not path.startswith(polygons_path + "/"):
             continue
@@ -446,8 +537,8 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         dense_list = [(bone_name, [dense[bone_name].get(i, 0.0)
                                    for i in range(vertex_count)])
                       for bone_name in sorted(dense)]
-        model.attachments.append(Attachment(
-            name=path.rsplit("/", 1)[-1].lower().replace(" ", "-"),
+        attachment = Attachment(
+            name=props.get("metadata/attachment", path.rsplit("/", 1)[-1]),
             # Converted scenes carry the owning slot as metadata; legacy
             # scenes without it keep the old 1:1 name-as-slot convention.
             slot=props.get("metadata/slot", ""),
@@ -460,9 +551,15 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
             # out_spine composes both when writing the JSON.
             offset=tuple(props.get("offset", [0.0, 0.0])),
             internal_vertices=props.get("internal_vertex_count", 0),
+            # The static flag is the SETUP state (what the scene draws with
+            # no animation applied); "drawn at some point" is recovered below
+            # from the visibility tracks.
+            setup=props.get("visible", True) is not False,
             equipped=props.get("visible", True) is not False,
             page=os.path.basename(texture_path) if texture_path else "",
-        ))
+        )
+        model.attachments.append(attachment)
+        node_attachments[path.rsplit("/", 1)[-1]] = attachment
 
     library = next(
         (s for s in scene["sub_resources"].values() if s["type"] == "AnimationLibrary"), None
@@ -472,6 +569,23 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
             match = re.match(r'SubResource\("([^"]+)"\)', str(reference))
             animation = scene["sub_resources"].get(match.group(1)) if match else None
             if animation and animation["type"] == "Animation":
-                model.animations[anim_name] = read_godot_animation(
+                tracks, visible_tracks = read_godot_animation(
                     animation, prefix, model)
+                model.animations[anim_name] = tracks
+                if visible_tracks:
+                    model.slot_timelines[anim_name] = _slot_timelines(
+                        visible_tracks, node_attachments)
+    # An attachment is "equipped" if any animation draws it, even when the
+    # setup state hides it: the visibility tracks carry that, the static
+    # Polygon2D flag does not.
+    drawn = {
+        entry["attachment"]
+        for timelines in model.slot_timelines.values()
+        for entries in timelines.values()
+        for entry in entries
+        if entry["attachment"]
+    }
+    for att in model.attachments:
+        if att.name in drawn:
+            att.equipped = True
     return model

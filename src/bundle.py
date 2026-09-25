@@ -138,6 +138,20 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
              f"{result.stats['animations']} animations")
         step("preview: python3 -m http.server --directory "
              f"{out}   then open http://localhost:8000/")
+    elif target == "tres":
+        step("writing Godot resource (.tres)")
+        artifacts = out / "output"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        output = artifacts / f"{name}.tres"
+        registry.WRITERS["tres"](model, str(output))
+        result.files = [output]
+        step(f"wrote output/{output.name}")
+        step(f"{result.stats['bones']} bones, "
+             f"{result.stats['attachments']} attachments, "
+             f"{result.stats['animations']} animations")
+        step("next: load it in Godot and hand it to "
+             "AnimationPlayer.add_animation_library — a .tres carries the "
+             "animations, not the skeleton node graph")
     else:
         step("writing Godot scene (.tscn + page image)")
         output = out / f"{name}.tscn"

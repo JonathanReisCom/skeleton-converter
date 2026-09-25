@@ -426,8 +426,34 @@ def write_spine_json(model: Skeleton, output_path: str,
                     }
                     for k in props["translate"]
                 ], "value")
+            if props.get("scale"):
+                # Absolute local scale, no axis mirroring: the Godot values
+                # ARE the spine values.
+                bone_tracks["scale"] = _clamp_first_last([
+                    {
+                        "time": round(k.time, 6),
+                        "x": round(k.scale[0], 6),
+                        "y": round(k.scale[1], 6),
+                        **({"curve": [round(c, 6) for c in k.curve]}
+                           if k.curve else {}),
+                    }
+                    for k in props["scale"]
+                ], "value")
             if bone_tracks:
                 animation["bones"][bone_name] = bone_tracks
+        slot_tracks = model.slot_timelines.get(anim_name) or {}
+        if slot_tracks:
+            animation["slots"] = {
+                slot_name: {
+                    "attachment": [
+                        {"time": round(key["time"], 6),
+                         **({"name": key["attachment"]}
+                            if key["attachment"] else {})}
+                        for key in keys
+                    ]
+                }
+                for slot_name, keys in slot_tracks.items()
+            }
         spine["animations"][anim_name] = animation
 
     # Atlas is named after the output JSON (not the source texture) so the

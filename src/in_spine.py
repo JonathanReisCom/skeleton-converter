@@ -278,8 +278,10 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     # the slot's setup attachment or an attachment timeline equips it. The
     # Spine runtime never renders the rest; the Godot leg hides them.
     equipped_by_slot: dict[str, set] = {}
+    setup_by_slot: dict[str, str | None] = {}
     for slot in spine["slots"]:
         setup = slot.get("attachment")
+        setup_by_slot[slot["name"]] = setup
         names = {setup} if setup else set()
         for animation in spine.get("animations", {}).values():
             for key in (animation.get("slots", {})
@@ -437,6 +439,11 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             ],
             position=(node_pos[0], node_pos[1]),
             equipped=is_equipped,
+            # The runtime draws the slot's setup attachment when no timeline
+            # has applied yet; a slot whose setup attachment is absent draws
+            # nothing there.
+            setup=bool(setup_by_slot.get(slot_name))
+            and entry_name == setup_by_slot.get(slot_name),
             page=region["page"] if region else "",
         ))
 
@@ -477,7 +484,31 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                         curve=k.get("curve"))
                     for k in props["translate"]
                 ]
+            if props.get("scale"):
+                # Absolute local scale; a key that omits x/y means 1 (the
+                # runtime's readTimeline2 default), not the previous key.
+                tracks.setdefault(bone_name, {})["scale"] = [
+                    Key(time=k.get("time", 0.0),
+                        scale=(k.get("x", 1.0), k.get("y", 1.0)),
+                        curve=k.get("curve"))
+                    for k in props["scale"]
+                ]
         model.animations[anim_name] = tracks
+        # Attachment timelines: which attachment each slot draws over time
+        # (a missing/nameless key hides the slot). Kept per animation, beside
+        # the bone tracks.
+        slots = animation.get("slots") or {}
+        slot_tracks = {}
+        for slot_name, channel in slots.items():
+            keys = channel.get("attachment") or []
+            if not keys:
+                continue
+            slot_tracks[slot_name] = [
+                {"time": k.get("time", 0.0), "attachment": k.get("name")}
+                for k in keys
+            ]
+        if slot_tracks:
+            model.slot_timelines[anim_name] = slot_tracks
 
     # Report what the conversion could and could not carry, so the CLI can say
     # it out loud instead of leaving the user to guess from the output file.

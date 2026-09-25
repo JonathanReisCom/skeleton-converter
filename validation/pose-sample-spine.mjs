@@ -62,4 +62,17 @@ for (const bone of skeleton.bones) {
   // (4.3 renamed it to `appliedPose`).
   out[bone.data.name] = [bone.a, bone.b, bone.c, bone.d, bone.worldX, bone.worldY];
 }
+// Additive diagnostics for the scale-track and attachment-timeline gates: the
+// bone world matrices above already encode scale, but an explicit entry (and
+// the slot's drawn attachment at this time) is what a failing comparison
+// needs in order to name the offender. Bone names stay the only matrix keys,
+// so the pose comparator is unaffected.
+out.__scale = {};
+for (const bone of skeleton.bones) {
+  out.__scale[bone.data.name] = [bone.scaleX, bone.scaleY];
+}
+out.__slots = {};
+for (const slot of skeleton.slots) {
+  out.__slots[slot.data.name] = slot.getAttachment() ? slot.getAttachment().name : null;
+}
 console.log(JSON.stringify(out));

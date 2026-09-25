@@ -162,6 +162,11 @@ class Attachment:
     position: tuple = (0.0, 0.0)  # Polygon2D node offset
     offset: tuple = (0.0, 0.0)    # Godot per-vertex offset property
     internal_vertices: int = 0
+    # Whether this entry is the slot's SETUP attachment — the one the Spine
+    # runtime draws with no animation applied, and the state a timeline's
+    # first key overwrites. Distinct from ``equipped``: an attachment an
+    # attachment timeline equips is drawn at some point but not at setup.
+    setup: bool = False
     # Whether the source rig actually draws this attachment: the slot's setup
     # attachment, or one an attachment timeline equips. The Spine runtime
     # never renders unequipped skin entries; the Godot leg must mirror that
@@ -194,6 +199,12 @@ class Key:
     angle: float = 0.0
     x: float = 0.0
     y: float = 0.0
+    # Scale-track value (sx, sy), absolute local bone scale. Scale needs no
+    # axis mirroring between the spaces (a magnitude has no direction), and
+    # the Spine runtime defaults a missing x/y to 1 — not to the previous
+    # key (SkeletonJson readTimeline2 defaultValue) — so every key is
+    # explicit here.
+    scale: tuple | None = None
     curve: tuple | None = None
 
 
@@ -204,6 +215,11 @@ class Skeleton:
     attachments: list = field(default_factory=list)  # list[Attachment]
     # name -> {bone_name: {"rotate": list[Key] | "translate": list[Key]}}
     animations: dict = field(default_factory=dict)
+    # Attachment timelines: {animation: {slot: [{"time": float,
+    # "attachment": name or None}]}}. A slot's drawn attachment changes over
+    # time; None hides the slot. Kept beside the bone tracks because a slot is
+    # not a bone and the two have independent key times.
+    slot_timelines: dict = field(default_factory=dict)
     texture_path: str = ""                           # res:// path from the source scene
     by_name: dict = field(default_factory=dict)      # bone name → Bone, populated by readers
     # Facts the reader learned that the caller should report rather than
@@ -353,20 +369,27 @@ def group_triangles(triangles: list) -> list:
     ]
 
 def godot_rest_worlds(model) -> dict:
-    """bone name -> GLOBAL REST world in Godot space, chained from Bone2D
-    rests (not node poses). Godot skins meshes with pose * global_rest^-1,
-    so this — not the node-pose world — is the bind basis for mesh locals.
-    Bones without an explicit rest fall back to their node pose (Spine
-    authoring, where bind == setup)."""
+    """bone name -> GLOBAL REST world in **standard convention** (a, b, c, d,
+    tx, ty — the same order ``multiply``/``compose``/``mirror_world`` use).
+
+    Godot skins meshes with pose * global_rest^-1, so this — not the
+    node-pose world — is the bind basis for mesh locals. Bones without an
+    explicit rest fall back to their node pose (Spine authoring, where bind
+    == setup).
+
+    Callers that need Godot's file-literal ``Transform2D`` order pass the
+    result through :func:`godot_matrix_from_standard`; the chained product
+    itself must stay in one convention, or the basis is silently the
+    transpose of the runtime's (every bone with a non-zero rest rotation then
+    lands its attachment geometry at twice that rotation — invisible on rigs
+    whose rests are identity).
+    """
     world = {}
     for bone in model.bones:
         pos, rot_deg, scale = bone.rest or (
             bone.position, bone.rotation_deg, bone.scale)
-        parent = world.get(bone.parent, (1, 0, 0, 1, 0, 0))
-        cos, sin = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
-        sx, sy = scale
-        world[bone.name] = multiply(parent, (
-            cos * sx, sin * sx, -sin * sy, cos * sy, pos[0], pos[1]))
+        parent = world.get(bone.parent, IDENTITY)
+        world[bone.name] = multiply(parent, compose(pos, rot_deg, scale))
     return world
 
 
@@ -385,6 +408,9 @@ def spine_inverse(kind: str, axis: str | None, bone: Skeleton):
     if kind == "rotate":
         # godot = rotation_deg - offset  (angle = -(setup_spine + offset))
         return lambda v: bone.rotation_deg - v
+    if kind == "scale":
+        # Scale is 1:1 between the spaces: the Godot value IS the spine value.
+        return lambda v: v
     if axis == "x":
         # godot = offset + setup_x
         return lambda v: v - bone.position[0]

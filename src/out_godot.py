@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from .model import Skeleton, godot_transform2d, godot_rest_worlds, invert, multiply
+from .model import Skeleton, godot_transform2d, invert, multiply
 from .model import group_triangles
 
 
@@ -54,8 +54,7 @@ def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs,
 def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kwargs) -> None:
     """Emit a .tscn with SkeletonRoot → Sprite2D → Skeleton2D → bones and
     Polygons → Polygon2D per attachment, plus an AnimationPlayer."""
-    world = godot_rest_worlds(model)
-    bone_nodes = _emit_bones(model, world)
+    bone_nodes = _emit_bones(model)
     # Distinct atlas pages get their own Texture2D; single-page rigs (or rigs
     # where every attachment shares one page) keep the default texture. In
     # multi-page mode the first page maps to the default id "1".
@@ -64,7 +63,7 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
     if len(pages) > 1:
         page_ids = {page: str(index + 2) for index, page in enumerate(pages)}
         page_ids[pages[0]] = "1"
-    polygon_nodes = _emit_attachments(model, world, texture_path, page_ids)
+    polygon_nodes = _emit_attachments(model, texture_path, page_ids)
     animation_resources, animation_refs = _emit_animations(model)
     content = _render_tscn(bone_nodes, polygon_nodes, animation_resources,
                            animation_refs, texture_path,
@@ -81,7 +80,7 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
 
 
 
-def _emit_bones(model, world):
+def _emit_bones(model):
     nodes = []
     node_by_bone = {}
     for bone in model.bones:
@@ -127,10 +126,36 @@ def _emit_bones(model, world):
 # ---------------------------------------------------------------------------
 
 
-def _emit_attachments(model, world, texture_path, page_ids=None):
-    polygon_nodes = []
+def _attachment_node_names(model):
+    """Attachment -> Polygon2D node name, in emission order.
+
+    Node name = the skin entry name verbatim: the viewer lists these as
+    the attachment options, so mangling case (`Eye_Anger` -> `Eye_anger`)
+    would make the Godot pane offer different-looking options than the
+    Spine pane. Godot rejects a few characters in node names; replace them
+    rather than dropping the name. Entries sharing a name across slots are
+    deduplicated — the owning slot travels as ``metadata/slot``, never as
+    part of the name.
+    """
     used_names = set()
+    names = []
     for att in model.attachments:
+        node_name = att.name
+        for bad, repl in ((".", "_"), ("/", "_"), (":", "_"), ("@", "_"),
+                          ('"', "_"), ("%", "_")):
+            node_name = node_name.replace(bad, repl)
+        base_name = node_name
+        suffix = 2
+        while node_name in used_names:
+            node_name = "%s_%d" % (base_name, suffix)
+            suffix += 1
+        used_names.add(node_name)
+        names.append((att, node_name))
+    return names
+
+def _emit_attachments(model, texture_path, page_ids=None):
+    polygon_nodes = []
+    for att, node_name in _attachment_node_names(model):
         polygon = att.polygon
         uv = att.uv
         weights = att.weights
@@ -155,10 +180,12 @@ def _emit_attachments(model, world, texture_path, page_ids=None):
                 f"{round(v, 6)}" for point in uv_points for v in point
             ),
         ]
-        # Mirror the Spine runtime: a skin attachment the source never equips
-        # (no setup attachment, no attachment timeline) must not draw — or
-        # side-by-side compare shows props the source hides.
-        if not att.equipped:
+        # Mirror the Spine runtime's SETUP state: only the slot's setup
+        # attachment draws before any timeline applies. An attachment an
+        # attachment timeline equips starts hidden and is switched on by its
+        # visibility track — otherwise a comparison frame before the first
+        # timeline key shows a prop the runtime does not draw.
+        if not att.setup:
             props.append("visible = false")
         if att.polygons:
             groups = att.polygons
@@ -208,25 +235,13 @@ def _emit_attachments(model, world, texture_path, page_ids=None):
             )]
             props.append("bones = [%s]" % ", ".join(parts))
 
-        # Node name = the skin entry name verbatim: the viewer lists these as
-        # the attachment options, so mangling case (`Eye_Anger` →
-        # `Eye_anger`) would make the Godot pane offer different-looking
-        # options than the Spine pane. Godot rejects a few characters in node
-        # names; replace them rather than dropping the name.
-        node_name = att.name
-        for bad, repl in ((".", "_"), ("/", "_"), (":", "_"), ("@", "_"),
-                          ('"', "_"), ("%", "_")):
-            node_name = node_name.replace(bad, repl)
-        base_name = node_name
-        suffix = 2
-        while node_name in used_names:
-            node_name = "%s_%d" % (base_name, suffix)
-            suffix += 1
-        used_names.add(node_name)
         # The slot travels as metadata: multiple attachments share a slot
-        # and the viewer switches between them by slot. Name = entry name
-        # (unique); `.capitalize()` would collide "body"/"Body".
+        # and the viewer switches between them by slot. Name = entry name.
         props.append("metadata/slot = \"%s\"" % (att.slot or att.name))
+        # The node name is deduplicated and character-substituted; the skin
+        # entry's real name travels as metadata so a round trip re-emits the
+        # source name instead of the node's mangled one (`splat03_2`).
+        props.append('metadata/attachment = "%s"' % att.name.replace('"', "_"))
         polygon_nodes.append({
             "name": node_name, "type": "Polygon2D",
             "parent": "Sprite2D/Polygons", "props": props,
@@ -347,6 +362,55 @@ def _emit_animations(model):
                 else:
                     tracks.append(("value", base,
                                    [(k.time, (k.x, k.y)) for k in keys]))
+            if props.get("scale"):
+                keys = props["scale"]
+                base = f"Sprite2D/Skeleton2D/{bone_relative}:scale"
+                if any(k.curve for k in keys):
+                    # Scale is 1:1 between the spaces (a magnitude has no
+                    # direction), so spine values are the model values.
+                    for axis in (0, 1):
+                        spine_values = [k.scale[axis] for k in keys]
+                        times = [k.time for k in keys]
+                        out_h, in_h = _solve_handles(keys, times, spine_values,
+                                                     False, axis=axis)
+                        tracks.append(("bezier", f"{base}:{'xy'[axis]}",
+                                       times,
+                                       [k.scale[axis] for k in keys],
+                                       out_h, in_h))
+                else:
+                    tracks.append(("value", base,
+                                   [(k.time, (k.scale[0], k.scale[1]))
+                                    for k in keys]))
+        # Attachment timelines: a slot's drawn attachment changes over time.
+        # Emitted as one boolean ``visible`` track per Polygon2D of that slot —
+        # Godot's AnimationPlayer drives polygon visibility directly, which is
+        # what the runtime's setAttachment does.
+        slot_tracks = model.slot_timelines.get(anim_name) or {}
+        if slot_tracks:
+            names_by_slot: dict = {}
+            for att, node_name in _attachment_node_names(model):
+                names_by_slot.setdefault(att.slot or att.name, {})[att.name] = node_name
+            setup_by_slot = {}
+            for att, _node in _attachment_node_names(model):
+                setup_by_slot.setdefault(att.slot or att.name, set())
+                if att.setup:
+                    setup_by_slot[att.slot or att.name].add(att.name)
+            for slot_name, keys in slot_tracks.items():
+                node_names = names_by_slot.get(slot_name) or {}
+                for att_name, node_name in node_names.items():
+                    key_list = [(k["time"], k["attachment"] == att_name)
+                                for k in keys]
+                    # Godot holds a value track's FIRST key backwards, while
+                    # the Spine runtime draws the slot's setup attachment
+                    # before the first timeline key — so a timeline starting
+                    # after t=0 needs an explicit t=0 key or the prop appears
+                    # early (the alien's death burst showed at t=0).
+                    if key_list and key_list[0][0] > 0.0:
+                        key_list.insert(
+                            0, (0.0, att_name in setup_by_slot.get(slot_name, ())))
+                    tracks.append(("visible",
+                                   f"Sprite2D/Polygons/{node_name}:visible",
+                                   key_list))
         lines = [f'[sub_resource type="Animation" id="{resource_id}"]']
         length = 0.0
         for track in tracks:
@@ -381,6 +445,10 @@ def _emit_animations(model):
                 times = ", ".join(str(t) for t, _ in keys)
                 if _path.endswith("rotation_degrees"):
                     values = ", ".join(str(round(v, 6)) for _, v in keys)
+                elif isinstance(keys[0][1], bool):
+                    # Attachment visibility: a discrete boolean track.
+                    values = ", ".join(
+                        "true" if v else "false" for _, v in keys)
                 else:
                     values = ", ".join(
                         f"Vector2({round(v[0], 6)}, {round(v[1], 6)})" for _, v in keys)
@@ -388,13 +456,20 @@ def _emit_animations(model):
                 lines.append(f"tracks/{track_index}/imported = false")
                 lines.append(f"tracks/{track_index}/enabled = true")
                 lines.append(f'tracks/{track_index}/path = NodePath("{_path}")')
-                lines.append(f"tracks/{track_index}/interp = 1")
+                # Visibility is discrete: with linear interpolation the engine
+                # blends false -> true as a float and any non-zero blend reads
+                # as visible, so a prop appears a whole segment early (the
+                # alien's death burst showed at t=0 and its splats at t=1.3).
+                discrete = isinstance(keys[0][1], bool)
+                lines.append(
+                    f"tracks/{track_index}/interp = {0 if discrete else 1}")
                 lines.append(f"tracks/{track_index}/loop_wrap = false")
                 lines.append(
                     'tracks/%d/keys = {\n"times": PackedFloat32Array(%s),\n'
-                    '"transitions": PackedFloat32Array(%s),\n"update": 0,\n'
+                    '"transitions": PackedFloat32Array(%s),\n"update": %d,\n'
                     '"values": [%s]\n}' % (track_index, times,
-                                           ", ".join("1" for _ in keys), values))
+                                           ", ".join("1" for _ in keys),
+                                           1 if discrete else 0, values))
         animation_resources.append({
             "id": resource_id, "lines": lines, "name": anim_name,
         })

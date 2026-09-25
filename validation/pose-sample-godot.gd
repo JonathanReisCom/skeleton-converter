@@ -43,6 +43,16 @@ func _init():
 		print("POSE ", bone.name, " ", position.x, " ", position.y)
 		print("ROT ", bone.name, " ", rad_to_deg(bone.get_global_transform().get_rotation()),
 				" local=", rad_to_deg(bone.rotation))
+		# Scale-track diagnostic: the LOCAL scale an AnimationPlayer track
+		# wrote (not the accumulated one), beside the global accumulated one.
+		print("SCALE ", bone.name, " ", bone.scale.x, " ", bone.scale.y,
+				" global=", transform.get_scale().x, ":", transform.get_scale().y)
+	# Attachment-timeline diagnostic: which Polygon2D of each slot is drawn.
+	# The slot rides as metadata (see README, "Every skin entry is carried");
+	# scenes from other sources fall back to the node name as the slot.
+	for poly in _find_all(scene, Polygon2D):
+		var slot: String = str(poly.get_meta("slot", poly.name))
+		print("VIS ", slot, " ", poly.name, " ", 1 if poly.visible else 0)
 	quit()
 
 func _all_bones(node: Node) -> Array:
