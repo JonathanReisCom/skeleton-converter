@@ -145,8 +145,18 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         # same way the reader does, instead of falling back to res://image.png
         # — a scene referencing a texture that does not exist will not load.
         image = in_spine.resolve_image_for_atlas(atlas_path, "")
+        # Multi-page atlas: every attachment carries its page; copy every
+        # page PNG beside the scene under its atlas name. The first page is
+        # re-stemmed (res://<name>.<ext>) like the single-page case.
+        rig_pages = sorted({a.page for a in model.attachments if a.page})
         if texture:
             texture_ref = texture
+        elif rig_pages:
+            first_page = Path(atlas_path).parent / rig_pages[0] \
+                if atlas_path else None
+            texture_ref = "res://" + (name + Path(rig_pages[0]).suffix)
+            image = str(first_page) if first_page and first_page.exists() \
+                else None
         elif image:
             texture_ref = "res://" + name + Path(image).suffix
         else:
@@ -155,13 +165,23 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         # One stem for the whole bundle: the scene references
         # res://<name>.<ext>, so the texture is copied under the bundle stem
         # (the atlas may name the page differently, e.g. "custom assets.png"
-        # for an "animation" bundle).
+        # for an "animation" bundle). Multi-page rigs reference every page by
+        # its atlas name, so every page file is copied as-is.
         texture_file = None
         if image and not texture and Path(image).exists():
             texture_file = name + Path(image).suffix
             dest = out / texture_file
             if Path(image).resolve() != dest.resolve():
                 shutil.copy2(image, dest)
+        # Extra atlas pages: copied by their own names — the scene references
+        # res://<page> for each.
+        page_files = []
+        if atlas_path and len(rig_pages) > 1:
+            for page in rig_pages[1:]:
+                source_file = Path(atlas_path).parent / page
+                if source_file.exists():
+                    shutil.copy2(source_file, out / page)
+                    page_files.append(out / page)
         # Artifacts live in output/ next to the browser shell; the web preview
         # build relocates them into its own project/output/.
         artifacts = out / "output"
@@ -169,6 +189,9 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         shutil.move(str(output), artifacts / output.name)
         if texture_file and (out / texture_file).exists():
             shutil.move(str(out / texture_file), artifacts / texture_file)
+        for page_file in page_files:
+            if (out / page_file.name).exists():
+                shutil.move(str(page_file), artifacts / page_file.name)
         result.files = [artifacts / output.name]
         result.texture = texture_ref
         wrote = f"output/{output.name}"

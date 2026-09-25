@@ -423,6 +423,8 @@ def write_spine_json(model: Skeleton, output_path: str,
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
     for att in model.attachments:
+        if not att.equipped:
+            continue  # setup-pose bounds only count what the rig draws
         poly_world = world.get(att.name) or (world.get(model.bones[0].name) if model.bones else None)
         if not poly_world:
             continue

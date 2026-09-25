@@ -40,6 +40,7 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
         return regions
     import re
     current = None
+    page = None
     for line in Path(atlas_path).read_text().splitlines():
         stripped = line.strip()
         if not stripped:
@@ -49,6 +50,7 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
         is_attr = bool(sep) and re.fullmatch(r"[a-zA-Z_]+", key.strip())
         if re.search(r"\.(png|jpg|webp)$", stripped, re.I):
             current = None  # page boundary
+            page = stripped
             continue
         if is_attr:
             if current is None:
@@ -63,6 +65,7 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
                         "width": numbers[2], "height": numbers[3], "degrees": 0,
                         "originalWidth": numbers[2], "originalHeight": numbers[3],
                         "offsetX": 0, "offsetY": 0,
+                        "page": page,
                     }
             elif key == "rotate" and current in regions:
                 regions[current]["degrees"] = int(float(value))
@@ -90,6 +93,21 @@ def resolve_image_for_atlas(atlas_path: str | None, texture_path: str) -> str:
     return texture_path
 
 
+def constraint_worlds(spine: dict, skin: str | None = None) -> dict:
+    """Bone name -> world matrix (spine space, y-up) from the RUNTIME solver:
+    setup pose, constraints applied, skin gating. The runtime leaves bones a
+    `skin: true` constraint deactivates at (0, 0); plain FK would place them
+    at their setup transforms. This is the ground truth the converted meshes
+    must match."""
+    from . import constraints
+    solver = constraints.ConstraintSolver(spine, skin=skin)
+    solver.apply()
+    return {
+        name: (st.a, st.b, st.c, st.d, st.world_x, st.world_y)
+        for name, st in solver.bones.items()
+    }
+
+
 def read_png_size(path: str) -> tuple | None:
     """Width/height from a PNG's IHDR chunk."""
     try:
@@ -106,16 +124,30 @@ def read_png_size(path: str) -> tuple | None:
 
 
 def spine_attachment_map(spine: dict) -> dict:
-    """slot name -> (attachment name, attachment dict) from the default skin."""
+    """slot name -> (attachment name, attachment dict) from the default skin.
+
+    Prefers the slot's setup attachment (what the runtime draws by default);
+    falls back to the first skin entry when the setup attachment is absent
+    or unnamed.
+    """
     skins = spine["skins"]
     attachments = (
         skins[0]["attachments"] if isinstance(skins, list) else next(iter(skins.values()))
     )
+    setups = {slot["name"]: slot.get("attachment")
+              for slot in spine.get("slots", [])}
     out = {}
     for slot_name, entries in attachments.items():
+        pick = None
         for attachment_name, attachment in entries.items():
-            out[slot_name] = (attachment_name, attachment)
-            break
+            if attachment_name == setups.get(slot_name) \
+                    or attachment.get("name", attachment_name) == setups.get(slot_name):
+                pick = (attachment_name, attachment)
+                break
+            if pick is None:
+                pick = (attachment_name, attachment)
+        if pick:
+            out[slot_name] = pick
     return out
 
 
@@ -167,9 +199,19 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     """
     spine = read_spine(json_path)
     atlas_regions = read_atlas_regions(atlas_path)
-    page_size = read_png_size(
-        resolve_image_for_atlas(atlas_path, json_path)
-    )
+    # Multi-page atlases: every page has its own size, and every region
+    # belongs to one page. Resolve each page's PNG beside the atlas and read
+    # its IHDR — UVs must be scaled against the region's own page, not the
+    # first one.
+    atlas_dir = Path(atlas_path).parent if atlas_path else Path(json_path).parent
+    page_sizes: dict = {}
+    for region in atlas_regions.values():
+        page = region.get("page")
+        if page and page not in page_sizes:
+            page_sizes[page] = read_png_size(str(atlas_dir / page))
+    page_size = page_sizes.get(next(iter(atlas_regions.values()))["page"]) \
+        if atlas_regions else read_png_size(
+            resolve_image_for_atlas(atlas_path, json_path))
     page_width, page_height = page_size if page_size else (1, 1)
 
     model = Skeleton()
@@ -226,6 +268,19 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
 
     # ---- attachments: convert region quads and weighted meshes to polygons
     attachments = spine_attachment_map(spine)
+    # Mirror the runtime's equipping: a skin entry is drawn only when it is
+    # the slot's setup attachment or an attachment timeline equips it. The
+    # Spine runtime never renders the rest; the Godot leg hides them.
+    equipped_by_slot: dict[str, set] = {}
+    for slot in spine["slots"]:
+        setup = slot.get("attachment")
+        names = {setup} if setup else set()
+        for animation in spine.get("animations", {}).values():
+            for key in (animation.get("slots", {})
+                        .get(slot["name"], {}).get("attachment", [])):
+                if key.get("name"):
+                    names.add(key["name"])
+        equipped_by_slot[slot["name"]] = names
     for slot in spine["slots"]:
         slot_name = slot["name"]
         entry = attachments.get(slot_name)
@@ -233,6 +288,8 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             continue
         attachment_name, att = entry
         host = slot["bone"]
+        entry_name = att.get("name", attachment_name)
+        is_equipped = entry_name in equipped_by_slot.get(slot_name, set())
         uvs = att.get("uvs", [])
         width = att.get("width", 1.0) or 1.0
         height = att.get("height", 1.0) or 1.0
@@ -241,9 +298,12 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         triangles = att.get("triangles", [])
 
         region = atlas_regions.get(attachment_name) or atlas_regions.get(slot_name)
+        # UVs scale against the region's own page in multi-page atlases.
+        pw, ph = (page_sizes.get(region["page"]) or (page_width, page_height)) \
+            if region and region.get("page") else (page_width, page_height)
         if region:
             region_left, region_top, region_right, region_bottom = region_uv_rect(
-                region, page_width, page_height
+                region, pw, ph
             )
         else:
             region_left, region_top = 0.0, 0.0
@@ -251,7 +311,11 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         region_w = region_right - region_left
         region_h = region_bottom - region_top
 
-        world = spine_world_transforms(spine)
+        # Attachment worlds come from the RUNTIME solver (setup + constraints
+        # + skin gating), not plain FK: bones a path/IK constraint drives sit
+        # elsewhere at setup than plain FK computes — the hero's
+        # thigh2/foot2/shin2 meshes drifted up to 1 unit without this.
+        world = constraint_worlds(spine, skin=skin)
         world_points = []
         uv_points = []
         weights_by_bone = {}
@@ -271,9 +335,11 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             bone_world = world.get(host, (1, 0, 0, 1, 0, 0))
             for corner in corners:
                 wp = transform(bone_world, transform(quad, corner))
-                world_points.append((wp[0], -wp[1]))
+                # Spine space (y-up) — the polygon conversion below mirrors
+                # once. Pre-mirroring here would double-flip Y.
+                world_points.append((wp[0], wp[1]))
             if region:
-                left, top, right, bottom = region_uv_rect(region, page_width, page_height)
+                left, top, right, bottom = region_uv_rect(region, pw, ph)
                 uv_points = [[left, top], [right, top], [right, bottom], [left, bottom]]
             else:
                 uv_points = [[0, 0], [width, 0], [width, height], [0, height]]
@@ -311,7 +377,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             for uv_index in range(0, min(len(uvs), vertex_count * 2), 2):
                 if region:
                     uv_points.append(list(region_uv_for_vertex(
-                        region, uvs[uv_index], uvs[uv_index + 1], page_width, page_height
+                        region, uvs[uv_index], uvs[uv_index + 1], pw, ph
                     )))
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
@@ -320,11 +386,14 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             bone_world = world.get(host, (1, 0, 0, 1, 0, 0))
             for index in range(0, len(vertices) - 1, 2):
                 wp = transform(bone_world, (vertices[index], vertices[index + 1]))
-                world_points.append((wp[0], -wp[1]))
+                # Spine space (y-up) — the polygon conversion below mirrors
+                # once. Pre-mirroring here would double-flip Y (the template
+                # dummy's unequipped-eye offset came from exactly this).
+                world_points.append((wp[0], wp[1]))
             for uv_index in range(0, min(len(uvs), len(vertices)), 2):
                 if region:
                     uv_points.append(list(region_uv_for_vertex(
-                        region, uvs[uv_index], uvs[uv_index + 1], page_width, page_height
+                        region, uvs[uv_index], uvs[uv_index + 1], pw, ph
                     )))
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
@@ -357,6 +426,8 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 for bn, vw in weights_by_bone.items()
             ],
             position=(node_pos[0], node_pos[1]),
+            equipped=is_equipped,
+            page=region["page"] if region else "",
         ))
 
     # ---- animations: Spine offsets → Godot absolute values

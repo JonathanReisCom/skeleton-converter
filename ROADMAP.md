@@ -39,6 +39,17 @@
 - [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
       bone along a chain (~0.42 after four), independent of constraints. It
       predates the constraint work and is the largest remaining error source
+- [x] ~~Unweighted mesh attachments land offset~~ — FIXED: the region and
+      unweighted branches pre-mirrored Y before the polygon conversion
+      mirrored it again (double flip); both now store spine-space points.
+      Caught by the mesh parity gate (`src/mesh_parity.py`), which re-derives
+      every skin attachment's world vertices with the ported runtime and
+      gates geometry, UV containment, and equipping — `hero` and the
+      template dummy both run at 0 violations
+- [x] ~~Constraint-driven bones place setup meshes by plain FK~~ — FIXED:
+      attachment worlds now come from the runtime solver (`constraint_worlds`):
+      setup pose + constraints + skin gating. The hero's
+      thigh2/foot2/shin2 drifted up to 1 unit without it
 - [ ] Skin attachments whose slot has no setup attachment are rendered by the
       Godot leg but never drawn by the Spine runtime (setup attachment `None`,
       and these animations carry no attachment timelines) — side-by-side

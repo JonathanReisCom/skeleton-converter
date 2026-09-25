@@ -160,6 +160,17 @@ class Attachment:
     position: tuple = (0.0, 0.0)  # Polygon2D node offset
     offset: tuple = (0.0, 0.0)    # Godot per-vertex offset property
     internal_vertices: int = 0
+    # Whether the source rig actually draws this attachment: the slot's setup
+    # attachment, or one an attachment timeline equips. The Spine runtime
+    # never renders unequipped skin entries; the Godot leg must mirror that
+    # (Polygon2D visible=false) or side-by-side compare shows props the
+    # source hides.
+    equipped: bool = True
+    # Which atlas page this attachment's texture lives on (the page image's
+    # file name as declared in the atlas). Empty means the default texture.
+    # Multi-page rigs need per-page textures in Godot — one Polygon2D
+    # texture cannot sample four pages.
+    page: str = ""
 
 
 @dataclass

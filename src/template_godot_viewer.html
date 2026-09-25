@@ -47,6 +47,7 @@ const GODOT_THREADS_ENABLED = false;
 // Animation tracks, filled by the boot script via window.previewAnims (called
 // from GDScript once the scene's AnimationPlayer reports its list). Clicking a
 // track calls window.previewPlay(name), which the scene wired to play it.
+window.previewInspectData = function (_csv) { /* replaced by debug probes */ };
 window.previewAnims = function (csv) {
   const names = csv.split(",").filter(Boolean);
   const label = document.getElementById("label");

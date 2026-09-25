@@ -22,11 +22,29 @@
   .pane[data-kind="spine"] label::after { content: " · spine webgl"; }
   iframe { position: absolute; inset: 0; width: 100%; height: 100%;
            border: 0; background: transparent; }
+  /* Alignment grid: identical spacing over both panes, so a feature at the
+     same screen position in both panes sits on the same line. */
+  .grid {
+    position: absolute; inset: 0; pointer-events: none; z-index: 1;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.12) 0 1px, transparent 1px 50px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.12) 0 1px, transparent 1px 50px),
+      repeating-linear-gradient(0deg, rgba(120,200,255,.25) 0 1px, transparent 1px 200px),
+      repeating-linear-gradient(90deg, rgba(120,200,255,.25) 0 1px, transparent 1px 200px);
+    background-position: 50% 50%;
+  }
+  .crosshair {
+    position: absolute; inset: 0; pointer-events: none; z-index: 1;
+    background:
+      linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+      linear-gradient(0deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  }
 </style>
 </head>
 <body>
 <div id="bar"><b>compare</b><span id="tracks">loading…</span>
   <button id="freezer" title="Freeze all panes at the given walk time">⏸ t=<span id="tval">0.0</span></button>
+<button id="gridbtn" title="Toggle alignment grid over every pane">⊞ grid</button>
 </div>
 <div id="stage"></div>
 <script>
@@ -42,6 +60,7 @@ const tracksBox = document.getElementById("tracks");
 const tval = document.getElementById("tval");
 let frozen = false;
 let freezeTime = 0.0;
+let currentName = null;  // shell-owned: set by play(), never guessed
 
 const frames = PANES.map(p => {
   const pane = document.createElement("div");
@@ -51,11 +70,25 @@ const frames = PANES.map(p => {
   label.textContent = p.label;
   const iframe = document.createElement("iframe");
   iframe.src = p.url;
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  const cross = document.createElement("div");
+  cross.className = "crosshair";
   pane.appendChild(label);
   pane.appendChild(iframe);
+  pane.appendChild(grid);
+  pane.appendChild(cross);
   stage.appendChild(pane);
-  return { kind: p.kind, label: p.label, iframe };
+  return { kind: p.kind, label: p.label, iframe, grid };
 });
+
+document.getElementById("gridbtn").onclick = (e) => {
+  const on = !frames[0].grid.style.display;
+  frames.forEach(f => f.grid.style.display = on ? "none" : "");
+  e.currentTarget.style.background = on ? "" : "#3b82f6";
+};
+// start with the grid visible
+frames.forEach(f => f.grid.style.display = "");
 
 function whenLoaded(iframe, test, attempt) {
   attempt = attempt || 0;
@@ -84,7 +117,8 @@ function godotAnimNames(pane) {
   } catch (e) { return null; }
 }
 
-Promise.all(ready).then(ws => {  paneReady = ws;
+Promise.all(ready).then((ws) => {
+  paneReady = ws;
   const spineFrame = frames.find(f => f.kind === "spine");
   let names = null;
   if (spineFrame) {
@@ -101,31 +135,98 @@ Promise.all(ready).then(ws => {  paneReady = ws;
     b.onclick = () => play(name, b);
     tracksBox.appendChild(b);
   });
+  // Pane HUD buttons drive the shell too: clicking a track inside either
+  // pane switches everything (shell bar + other pane) so no pane can end
+  // up on a different animation from the rest.
+  frames.forEach((f, i) => {
+    try {
+      f.iframe.contentDocument.querySelectorAll("button").forEach(b => {
+        b.addEventListener("click", () => {
+          const shellBtn = [...tracksBox.querySelectorAll("button")]
+            .find(x => x.textContent === b.textContent);
+          if (shellBtn) play(b.textContent, shellBtn);
+        });
+      });
+    } catch (e) { /* pane not ready */ }
+  });
 });
 
 function clearActive() {
   [...tracksBox.querySelectorAll("button")].forEach(b => b.classList.remove("active"));
 }
 
+// Master clock: the two engines free-run on independent clocks, so live
+// playback drifts and every instant shows different poses. The shell owns
+// the time: it seeks BOTH panes to the same t every animation frame, making
+// the comparison deterministic instead of a race between two clocks.
+let masterClock = null;   // { name, start }
+function seekAll(name, t) {
+  frames.forEach((f, i) => {
+    if (f.kind === "godot") paneReady[i].previewFreeze(name, t);
+    else freezeSpineAt(name, t, paneReady[i].__state, paneReady[i].__skeleton);
+  });
+}
+
+function tickMaster() {
+  if (masterClock === null || frozen) { masterClock = null; return; }
+  const t = (performance.now() - masterClock.start) / 1000;
+  seekAll(masterClock.name, t);
+  requestAnimationFrame(tickMaster);
+}
+
 function play(name, button) {
+  currentName = name;
   clearActive();
   if (button) button.classList.add("active");
+  // Switch animations on BOTH panes: the spine pane must setAnimation (its
+  // freeze only seeks the CURRENT entry — seeking without switching keeps
+  // the previous animation playing under a new name), and mixing must be
+  // disabled or poses blend across the switch.
   frames.forEach((f, i) => {
     if (f.kind === "spine") {
-      const w = paneReady[i];
-      const state = w.__state, sk = w.__skeleton;
+      const state = paneReady[i].__state;
       state.data.defaultMix = 0;
-      state.setAnimation(0, name, true);
-      if (frozen) freezeSpineAt(name, freezeTime, state, sk);
-    } else {
-      paneReady[i].previewPlay(name);
+      const entry = state.setAnimation(0, name, true);
+      // setAnimation replaces the frozen entry with a fresh timeScale=1 one;
+      // a frozen switch must re-apply the freeze or the spine pane keeps
+      // animating while godot waits at the freeze time.
+      if (frozen) {
+        entry.timeScale = 0;
+        entry.trackTime = freezeTime;
+      }
     }
+  });
+  syncPaneButtons(name);
+  // Frozen: sample the NEW animation at the current freeze time — seeking
+  // to 0.0 would show the setup pose on one pane and mid-stride on the
+  // other (the exact "head/hands wrong, feet fine" mismatch).
+  masterClock = { name, start: performance.now() - (frozen ? freezeTime : 0.0) * 1000 };
+  seekAll(name, frozen ? freezeTime : 0.0);
+  if (!frozen) requestAnimationFrame(tickMaster);
+}
+
+// The panes have their own HUD track buttons; when the shell switches the
+// animation, highlight the same button inside every pane so the HUDs never
+// contradict what is playing.
+function syncPaneButtons(name) {
+  frames.forEach(f => {
+    try {
+      f.iframe.contentDocument.querySelectorAll("button").forEach(b => {
+        b.classList.toggle("active", b.textContent === name);
+      });
+    } catch (e) { /* not ready yet */ }
   });
 }
 
 function freezeSpineAt(name, t, state, sk) {
   const entry = state.getCurrent(0);
-  if (entry) { entry.timeScale = 0; entry.trackTime = t; }
+  if (entry) {
+    entry.timeScale = 0;
+    // spine-ts exposes the animation as a property; getAnimation() throws
+    // and kills the master clock's rAF chain.
+    const duration = entry.animation.duration;
+    entry.trackTime = duration > 0 ? (t % duration) : t;
+  }
   state.update(0); state.apply(sk);
   sk.update(0); sk.updateWorldTransform(1);
 }
@@ -133,24 +234,30 @@ function freezeSpineAt(name, t, state, sk) {
 document.getElementById("freezer").onclick = () => {
   frozen = !frozen;
   document.getElementById("freezer").classList.toggle("active", frozen);
-  const active = tracksBox.querySelector("button.active");
-  if (!frozen) {
-    frames.forEach((f, i) => {
-      if (f.kind === "godot" && active) paneReady[i].previewPlay(active.textContent);
-      if (f.kind === "spine") {
-        const e = paneReady[i].__state.getCurrent(0);
-        if (e) e.timeScale = 1;
-      }
+  const name = currentName || (tracksBox.querySelector("button.active") || {}).textContent;
+  if (frozen) {
+    // Kill the master clock FIRST: a pending requestAnimationFrame would
+    // fire one more previewFreeze — which plays → seeks → pauses, and Godot
+    // advances between the seek and the next call (the Spine pane stayed
+    // still while Godot kept walking).
+    const deadClock = masterClock;
+    masterClock = null;
+    if (deadClock) {
+      // freezing mid-playback: capture the current master time
+      freezeTime = Math.round((performance.now() - deadClock.start) / 1000 * 10) / 10;
+    } else {
+      freezeTime = Math.round((freezeTime + 0.3) * 10) / 10;
+    }
+    tval.textContent = freezeTime.toFixed(1);
+    // Let the in-flight frame drain, then freeze once, deterministically.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => seekAll(name, freezeTime));
     });
     return;
   }
-  const name = active ? active.textContent : "walk";
-  freezeTime = Math.round((freezeTime + 0.3) * 10) / 10;
-  tval.textContent = freezeTime.toFixed(1);
-  frames.forEach((f, i) => {
-    if (f.kind === "godot") paneReady[i].previewFreeze(name, freezeTime);
-    else freezeSpineAt(name, freezeTime, paneReady[i].__state, paneReady[i].__skeleton);
-  });
+  // resume: restart the master clock from the frozen time
+  masterClock = { name, start: performance.now() - freezeTime * 1000 };
+  requestAnimationFrame(tickMaster);
 };
 </script>
 </body>

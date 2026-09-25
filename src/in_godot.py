@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 from pathlib import Path
 
@@ -423,6 +424,13 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
         if node["type"] != "Polygon2D" or not path.startswith(polygons_path + "/"):
             continue
         props = node["props"]
+        # Per-attachment texture: multi-page rigs reference a different atlas
+        # page per Polygon2D; resolve the ext_resource id to its path.
+        texture_match = re.search(r'ExtResource\("([^"]+)"\)',
+                                  props.get("texture", ""))
+        texture_path = next(
+            (e["path"] for e in scene["ext_resources"]
+             if texture_match and e.get("id") == texture_match.group(1)), "")
         weights = parse_polygon_weights(props.get("bones", []))
         polygon = props.get("polygon", [])
         position = props.get("position", [0.0, 0.0])
@@ -449,6 +457,8 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
             # out_spine composes both when writing the JSON.
             offset=tuple(props.get("offset", [0.0, 0.0])),
             internal_vertices=props.get("internal_vertex_count", 0),
+            equipped=props.get("visible", True) is not False,
+            page=os.path.basename(texture_path) if texture_path else "",
         ))
 
     library = next(

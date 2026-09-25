@@ -9,9 +9,15 @@ from .model import Skeleton, godot_transform2d, godot_rest_worlds, invert, multi
 from .model import group_triangles
 
 
-def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs, texture_path):
+def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs,
+                 texture_path, extra_textures=None):
     lines = ['[gd_scene format=3]', ""]
     lines.append(f'[ext_resource type="Texture2D" path="{texture_path}" id="1"]')
+    # Multi-page rigs: one Texture2D ext_resource per atlas page; Polygon2Ds
+    # reference the page their region was packed into.
+    for resource_id, page_name in (extra_textures or []):
+        lines.append(f'[ext_resource type="Texture2D" path="res://{page_name}" '
+                     f'id="{resource_id}"]')
     lines.append("")
     for entry in animation_resources:
         lines.extend(entry["lines"])
@@ -50,10 +56,20 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
     Polygons → Polygon2D per attachment, plus an AnimationPlayer."""
     world = godot_rest_worlds(model)
     bone_nodes = _emit_bones(model, world)
-    polygon_nodes = _emit_attachments(model, world, texture_path)
+    # Distinct atlas pages get their own Texture2D; single-page rigs (or rigs
+    # where every attachment shares one page) keep the default texture. In
+    # multi-page mode the first page maps to the default id "1".
+    page_ids: dict = {}
+    pages = sorted({a.page for a in model.attachments if a.page})
+    if len(pages) > 1:
+        page_ids = {page: str(index + 2) for index, page in enumerate(pages)}
+        page_ids[pages[0]] = "1"
+    polygon_nodes = _emit_attachments(model, world, texture_path, page_ids)
     animation_resources, animation_refs = _emit_animations(model)
     content = _render_tscn(bone_nodes, polygon_nodes, animation_resources,
-                           animation_refs, texture_path)
+                           animation_refs, texture_path,
+                           extra_textures=[(rid, page) for page, rid in
+                                           page_ids.items() if rid != "1"])
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -111,7 +127,7 @@ def _emit_bones(model, world):
 # ---------------------------------------------------------------------------
 
 
-def _emit_attachments(model, world, texture_path):
+def _emit_attachments(model, world, texture_path, page_ids=None):
     polygon_nodes = []
     for att in model.attachments:
         polygon = att.polygon
@@ -129,7 +145,7 @@ def _emit_attachments(model, world, texture_path):
         node_pos = att.position
         props = [
             f"position = Vector2({round(node_pos[0], 6)}, {round(node_pos[1], 6)})",
-            f'texture = ExtResource("1")',
+            f'texture = ExtResource("{page_ids.get(att.page, "1")}")',
             'skeleton = NodePath("../../Skeleton2D")',
             "polygon = PackedVector2Array(%s)" % ", ".join(
                 f"{round(v, 6)}" for point in local_points for v in point
@@ -138,6 +154,11 @@ def _emit_attachments(model, world, texture_path):
                 f"{round(v, 6)}" for point in uv_points for v in point
             ),
         ]
+        # Mirror the Spine runtime: a skin attachment the source never equips
+        # (no setup attachment, no attachment timeline) must not draw — or
+        # side-by-side compare shows props the source hides.
+        if not att.equipped:
+            props.append("visible = false")
         if att.polygons:
             groups = att.polygons
             if groups and isinstance(groups[0], int):
