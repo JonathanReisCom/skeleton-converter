@@ -448,6 +448,9 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
                       for bone_name in sorted(dense)]
         model.attachments.append(Attachment(
             name=path.rsplit("/", 1)[-1].lower().replace(" ", "-"),
+            # Converted scenes carry the owning slot as metadata; legacy
+            # scenes without it keep the old 1:1 name-as-slot convention.
+            slot=props.get("metadata/slot", ""),
             polygon=polygon,
             uv=props.get("uv") or polygon,
             polygons=props.get("polygons", []),

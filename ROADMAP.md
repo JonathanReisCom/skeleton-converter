@@ -50,13 +50,17 @@
       attachment worlds now come from the runtime solver (`constraint_worlds`):
       setup pose + constraints + skin gating. The hero's
       thigh2/foot2/shin2 drifted up to 1 unit without it
-- [ ] Skin attachments whose slot has no setup attachment are rendered by the
-      Godot leg but never drawn by the Spine runtime (setup attachment `None`,
-      and these animations carry no attachment timelines) — side-by-side
-      compare shows Godot drawing unequipped props (armor/props of the
-      `Solt :` slots) that the source hides. Fix shape: mirror the runtime's
-      equipping (slot setup attachment + attachment timelines) instead of
-      drawing every skin attachment
+- [x] ~~Skin attachments whose slot has no setup attachment are rendered by the
+      Godot leg but never drawn by the Spine runtime~~ — FIXED: equipping now
+      mirrors the runtime (slot setup attachment + attachment timelines), and
+      **every** skin entry is carried with `Attachment.slot` + `metadata/slot`,
+      so the Godot viewer switches variants per slot exactly like the Spine
+      viewer (verified on the template dummy: identical option lists, and
+      `Eye_laugh` / `cloakObject_03` render identically in both panes)
+- [ ] Attachment **timelines** (a slot changing attachment mid-animation) are
+      still not converted: switching a variant in the Godot viewer shows the
+      setup-pose geometry for the whole animation. Fix shape: emit the slot's
+      attachment changes as `Polygon2D` visibility tracks on the same timeline
 - [ ] A native Godot scene's `Sprite2D` position offset is not representable
       in Spine (which has no scene-level offset — only bones). Measured victim:
       the official hero demo's `Sprite2D.position = (0, -15)`; the converted

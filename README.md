@@ -252,6 +252,23 @@ as the key values and receive the same mirroring/offset transform.
 Godot's `internal_vertex_count` vertices are dropped only when `polygons` is
 empty — an explicit index list draws them all.
 
+### Every skin entry is carried, keyed by slot
+
+A slot's skin map holds *many* attachments (eye shapes, hair, props), not one.
+The model keeps them all: `Attachment.slot` names the owner, `Attachment.name`
+is the skin entry verbatim, and `Attachment.equipped` marks the one the runtime
+draws at setup (the slot's setup attachment, or one an attachment timeline
+equips). The Godot leg emits a `Polygon2D` per entry with `metadata/slot`, and
+the viewer offers one select per slot — the same switching the Spine viewer
+does. Two traps:
+
+- **Case is data.** Mangled names (`Eye_Anger` → `Eye_anger`) make the Godot
+  pane offer differently-spelled options than the Spine pane; the entry name is
+  written as-is, with only Godot-illegal characters substituted.
+- **Naming collisions.** Entries with the same name in different slots are
+  deduplicated at the node level; the slot survives only as metadata, never as
+  part of the node name.
+
 ### Spine `inherit` modes
 
 A bone with `noRotationOrReflection` (common on feet) does not follow the

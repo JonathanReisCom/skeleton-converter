@@ -129,6 +129,7 @@ def _emit_bones(model, world):
 
 def _emit_attachments(model, world, texture_path, page_ids=None):
     polygon_nodes = []
+    used_names = set()
     for att in model.attachments:
         polygon = att.polygon
         uv = att.uv
@@ -207,8 +208,27 @@ def _emit_attachments(model, world, texture_path, page_ids=None):
             )]
             props.append("bones = [%s]" % ", ".join(parts))
 
+        # Node name = the skin entry name verbatim: the viewer lists these as
+        # the attachment options, so mangling case (`Eye_Anger` →
+        # `Eye_anger`) would make the Godot pane offer different-looking
+        # options than the Spine pane. Godot rejects a few characters in node
+        # names; replace them rather than dropping the name.
+        node_name = att.name
+        for bad, repl in ((".", "_"), ("/", "_"), (":", "_"), ("@", "_"),
+                          ('"', "_"), ("%", "_")):
+            node_name = node_name.replace(bad, repl)
+        base_name = node_name
+        suffix = 2
+        while node_name in used_names:
+            node_name = "%s_%d" % (base_name, suffix)
+            suffix += 1
+        used_names.add(node_name)
+        # The slot travels as metadata: multiple attachments share a slot
+        # and the viewer switches between them by slot. Name = entry name
+        # (unique); `.capitalize()` would collide "body"/"Body".
+        props.append("metadata/slot = \"%s\"" % (att.slot or att.name))
         polygon_nodes.append({
-            "name": att.name.capitalize(), "type": "Polygon2D",
+            "name": node_name, "type": "Polygon2D",
             "parent": "Sprite2D/Polygons", "props": props,
         })
     return polygon_nodes

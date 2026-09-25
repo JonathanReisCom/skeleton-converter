@@ -346,12 +346,27 @@ def write_spine_json(model: Skeleton, output_path: str,
                 ))
             ]
 
-        spine["slots"].append({
-            "name": att.name,
-            "bone": host,
-            "attachment": att.name,
-        })
-        spine["skins"][0]["attachments"].setdefault(att.name, {})[att.name] = entry
+        # Group by owning slot: multiple attachments (variants) may share a
+        # slot; the slot lists one setup attachment (the equipped pick) and
+        # the default skin carries every entry so runtimes/viewers can
+        # switch between them.
+        slot_name = att.slot or att.name
+        if not any(s["name"] == slot_name for s in spine["slots"]):
+            spine["slots"].append({
+                "name": slot_name,
+                "bone": host,
+                "attachment": att.name if att.equipped else "",
+            })
+        elif att.equipped:
+            next(s for s in spine["slots"]
+                 if s["name"] == slot_name)["attachment"] = att.name
+        spine["skins"][0]["attachments"].setdefault(slot_name, {})[att.name] = entry
+
+    # A slot without a setup attachment must omit the key entirely — an
+    # empty string is not a valid attachment reference.
+    for slot in spine["slots"]:
+        if not slot.get("attachment"):
+            slot.pop("attachment", None)
 
     for anim_name, tracks in model.animations.items():
         animation = {"bones": {}}

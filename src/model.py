@@ -157,6 +157,8 @@ class Attachment:
     uv: list
     polygons: list  # triangle groups as index lists
     weights: list
+    # Owning slot; empty means the name doubles as the slot (legacy 1:1).
+    slot: str = ""
     position: tuple = (0.0, 0.0)  # Polygon2D node offset
     offset: tuple = (0.0, 0.0)    # Godot per-vertex offset property
     internal_vertices: int = 0

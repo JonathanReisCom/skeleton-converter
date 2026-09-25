@@ -121,34 +121,25 @@ def mesh_parity(spine_path: str, atlas_path: str | None = None,
             page_sizes[page] = read_png_size(str(atlas_dir / page)) or (1, 1)
 
     violations: list = []
-    by_slot = {att.name: att for att in model.attachments}
-    # The conversion keeps one attachment per slot: the setup pick
-    # (spine_attachment_map). Only that entry can match the model.
+    # Every default-skin entry is converted now; index the model by
+    # (slot, attachment name) instead of assuming one entry per slot.
+    by_slot: dict = {}
+    for att in model.attachments:
+        slot_key = (att.slot or att.name).lower()
+        by_slot.setdefault(slot_key, {})[att.name.lower()] = att
+        by_slot.setdefault(slot_key, {})[att.name.lower().replace(" ", "-")] = att
     setups = {slot["name"]: slot.get("attachment") for slot in spine["slots"]}
     for slot in spine["slots"]:
         slot_name = slot["name"]
         bone_name = slot["bone"]
         entries = skin_attachments.get(slot_name, {})
-        converted_name = None
-        for att_name, att in entries.items():
-            if setups.get(slot_name) and (
-                    att_name == setups[slot_name]
-                    or att.get("name", att_name) == setups[slot_name]):
-                converted_name = att_name
-                break
-        if converted_name is None and entries:
-            converted_name = next(iter(entries))
         for att_name, att in entries.items():
             is_equipped = (slot_name, att_name) in equipped
-            model_att = by_slot.get(slot_name.lower())
-            if att_name != converted_name:
-                if is_equipped and (model_att is None or model_att.equipped):
-                    pass  # sibling entry: not converted, the setup one is
-                continue
+            model_att = by_slot.get(slot_name.lower(), {}).get(att_name.lower())
             if model_att is None:
                 violations.append(
-                    f"{slot_name}/{att_name}: equipped attachment missing "
-                    "from the canonical model")
+                    f"{slot_name}/{att_name}: attachment missing from the "
+                    "canonical model")
                 continue
             # A slot without a setup attachment draws nothing at setup: the
             # converted first entry is correctly flagged unequipped.

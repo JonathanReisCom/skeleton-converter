@@ -267,7 +267,13 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         model.by_name[name] = bone
 
     # ---- attachments: convert region quads and weighted meshes to polygons
-    attachments = spine_attachment_map(spine)
+    # EVERY default-skin entry is carried, not just the setup pick: the Godot
+    # leg must hold all variants so its viewer can switch attachments per
+    # slot the same way the Spine viewer does.
+    skins = spine["skins"]
+    skin_attachments = (
+        skins[0]["attachments"] if isinstance(skins, list) else next(iter(skins.values()))
+    )
     # Mirror the runtime's equipping: a skin entry is drawn only when it is
     # the slot's setup attachment or an attachment timeline equips it. The
     # Spine runtime never renders the rest; the Godot leg hides them.
@@ -281,12 +287,13 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 if key.get("name"):
                     names.add(key["name"])
         equipped_by_slot[slot["name"]] = names
+    attachment_jobs = []
     for slot in spine["slots"]:
+        entries = skin_attachments.get(slot["name"], {})
+        for attachment_name, att in entries.items():
+            attachment_jobs.append((slot, attachment_name, att))
+    for slot, attachment_name, att in attachment_jobs:
         slot_name = slot["name"]
-        entry = attachments.get(slot_name)
-        if not entry:
-            continue
-        attachment_name, att = entry
         host = slot["bone"]
         entry_name = att.get("name", attachment_name)
         is_equipped = entry_name in equipped_by_slot.get(slot_name, set())
@@ -416,7 +423,10 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         # spine world is y-up; the Godot node position is y-down — mirror it.
         node_pos = (anchor_world[4], -anchor_world[5])
         model.attachments.append(Attachment(
-            name=slot_name.lower(),
+            # Keep the skin entry's exact case: the viewer lists attachment
+            # names as-is, and options must match the source's spelling.
+            name=entry_name,
+            slot=slot_name,
             polygon=[(p[0] - anchor_world[4], -(p[1] - anchor_world[5]))
                      for p in world_points],
             uv=uv_points,

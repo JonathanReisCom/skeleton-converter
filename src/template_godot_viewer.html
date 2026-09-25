@@ -47,16 +47,24 @@
                                border-color: var(--text); font-weight: 700; }
   #attachments {
     position: fixed; top: 82px; right: 10px; z-index: 2;
+    font: 12px/1.4 system-ui, sans-serif; color: var(--text);
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 9px 12px; width: 240px;
-    max-height: 80vh; overflow: auto; z-index: 2;
+    border-radius: 14px; padding: 9px 12px;
+    max-height: 90vh; overflow: auto; width: 260px;
   }
   #attachments .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-  #attachments .slot-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
-                            white-space: nowrap; color: var(--muted);
-                            font-family: var(--mono); font-size: 11px; }
-  #attachments input { accent-color: var(--godot); cursor: pointer; }
-  #attachments input:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #attachments .slot-name {
+    flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--muted);
+    font-family: var(--mono); font-size: 11px;
+  }
+  #attachments select {
+    flex: 0 0 auto; max-width: 140px; font: 11px var(--mono);
+    background: #22252e; color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 3px 8px; cursor: pointer;
+  }
+  #attachments select:hover { border-color: #4a5164; }
+  #attachments select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
   #error { position: fixed; left: 8px; bottom: 8px; color: #f66;
            font-size: 12px; max-width: 70vw; z-index: 10; white-space: pre-wrap; }
   #status { position: fixed; inset: 0; display: flex; flex-direction: column;
@@ -65,7 +73,7 @@
   #progress { width: 40%; height: 8px; border: 1px solid var(--border);
               border-radius: 999px; margin-top: 10px; overflow: hidden; }
   #progress-inner { height: 100%; width: 0; background: var(--godot); }
-  @media (prefers-reduced-motion: reduce) { #panel button { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { #panel button, #attachments-toggle { transition: none; } }
 </style>
 </head>
 <body>
@@ -94,7 +102,8 @@ const GODOT_THREADS_ENABLED = false;
 window.previewInspectData = function (_csv) { /* replaced by debug probes */ };
 window.previewAttachments = function (json) {
   // Attachment explorer, the Godot-side twin of the Spine viewer's panel:
-  // each skin attachment is a Polygon2D; visibility is the equip state.
+  // one select per slot; choosing an attachment shows it and hides its
+  // slot siblings, "(none)" hides the whole slot.
   const toggle = document.getElementById("attachments-toggle");
   const box = document.getElementById("attachments");
   toggle.hidden = false;
@@ -103,21 +112,30 @@ window.previewAttachments = function (json) {
     toggle.classList.toggle("active", !box.hidden);
   };
   box.innerHTML = "";
-  JSON.parse(json).forEach(({ name, visible }) => {
+  JSON.parse(json).forEach(({ slot, attachments }) => {
     const row = document.createElement("div");
     row.className = "row";
     const label = document.createElement("span");
     label.className = "slot-name";
-    label.textContent = name;
-    label.title = name;
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.checked = visible;
-    check.onchange = () => {
-      window.previewSetAttachment && window.previewSetAttachment(name, check.checked);
+    label.textContent = slot;
+    label.title = slot;
+    const sel = document.createElement("select");
+    const none = document.createElement("option");
+    none.textContent = "(none)";
+    sel.appendChild(none);
+    const options = attachments.slice().sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    options.forEach(({ name, visible }) => {
+      const o = document.createElement("option");
+      o.textContent = name;
+      sel.appendChild(o);
+      if (visible) sel.value = name;
+    });
+    sel.onchange = () => {
+      window.previewSetAttachment && window.previewSetAttachment(slot, sel.value);
     };
     row.appendChild(label);
-    row.appendChild(check);
+    row.appendChild(sel);
     box.appendChild(row);
   });
 };

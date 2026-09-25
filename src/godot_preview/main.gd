@@ -156,23 +156,44 @@ func _report_cam(_args: Array) -> void:
 
 func _publish_attachments(_args: Array) -> void:
 	# Attachment explorer: every skin attachment is a Polygon2D in the
-	# converted scene; visibility is the equip state. Publish name + visible
-	# so the viewer shell can render the same explorer the Spine pane has.
+	# converted scene; the owning slot rides as metadata/slot. Group by
+	# slot so the viewer renders one select per slot — the same explorer
+	# the Spine viewer has.
 	var win := JavaScriptBridge.get_interface("window")
-	var items := []
+	var order: Array = []
+	var by_slot := {}
 	for poly in _collect(_scene_root, Polygon2D):
 		_attachments[poly.name] = poly
-		items.append({"name": poly.name, "visible": poly.visible})
-	win.previewAttachments(JSON.stringify(items))
+		var slot := str(poly.get_meta("slot", poly.name))
+		if not by_slot.has(slot):
+			by_slot[slot] = []
+			order.append(slot)
+		by_slot[slot].append({"name": poly.name, "visible": poly.visible})
+	var groups := []
+	for slot in order:
+		groups.append({"slot": slot, "attachments": by_slot[slot]})
+	win.previewAttachments(JSON.stringify(groups))
 
 func _web_set_attachment(args: Array) -> void:
-	# Bridge flattens: previewSetAttachment("L_hand", true) -> ["L_hand", true].
-	if args.size() < 2 or _attachments.is_empty():
+	# Bridge flattens: previewSetAttachment("Head", "Head") ->
+	# ["Head", "Head"]. Show the chosen attachment of the slot, hide its
+	# siblings; an empty name hides the whole slot (the "(none)" option).
+	if args.size() < 2:
 		return
-	var poly: Polygon2D = _attachments.get(str(args[0]))
-	if poly == null:
-		return
-	poly.visible = bool(args[1])
+	var slot := str(args[0])
+	var chosen := str(args[1])
+	var found := false
+	for poly in _collect(_scene_root, Polygon2D):
+		if str(poly.get_meta("slot", poly.name)) != slot:
+			continue
+		found = true
+		poly.visible = chosen != "" and poly.name == chosen
+	if not found:
+		# Legacy scenes without slot metadata: fall back to a direct
+		# visibility toggle keyed by the poly name.
+		var poly: Polygon2D = _attachments.get(slot)
+		if poly != null:
+			poly.visible = chosen != ""
 
 func _capture_setup_pose() -> void:
 	# Snapshot every property any animation track touches, so a switch can
