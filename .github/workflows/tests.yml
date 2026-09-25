@@ -30,6 +30,18 @@ jobs:
       - name: Run tests
         run: python3 -m pytest tests/ -v
 
+      # CLI end-to-end over a rig generated in code (tests/ci_rig.py), both
+      # directions. Everything lands in tmp/, which is gitignored. The Godot
+      # web preview is not a CI dependency: the CLI catches the missing engine
+      # and prints "web preview unavailable" while still writing the scene
+      # (src/bundle.py, godot_preview.ExportError).
+      - name: Convert both directions with the CLI
+        run: |
+          python3 -m tests.ci_rig build tmp/ci
+          python3 -m src.cli convert --from spine --to godot tmp/ci/rig.json -o tmp/ci/godot
+          python3 -m src.cli convert --from godot --to spine tmp/ci/godot/output/rig.tscn -o tmp/ci/spine
+          python3 -m tests.ci_rig verify tmp/ci/godot tmp/ci/spine
+
       - name: Smoke-test the CLI
         run: |
           python3 -m src.cli --help
