@@ -348,7 +348,7 @@ def _emit_animations(model):
                 lines.append(f"tracks/{track_index}/enabled = true")
                 lines.append(f'tracks/{track_index}/path = NodePath("{_path}")')
                 lines.append(f"tracks/{track_index}/interp = 1")
-                lines.append(f"tracks/{track_index}/loop_wrap = true")
+                lines.append(f"tracks/{track_index}/loop_wrap = false")
                 lines.append(
                     'tracks/%d/keys = {\n"handle_modes": PackedInt32Array(%s),\n'
                     '"points": PackedFloat32Array(%s),\n'
@@ -369,7 +369,7 @@ def _emit_animations(model):
                 lines.append(f"tracks/{track_index}/enabled = true")
                 lines.append(f'tracks/{track_index}/path = NodePath("{_path}")')
                 lines.append(f"tracks/{track_index}/interp = 1")
-                lines.append(f"tracks/{track_index}/loop_wrap = true")
+                lines.append(f"tracks/{track_index}/loop_wrap = false")
                 lines.append(
                     'tracks/%d/keys = {\n"times": PackedFloat32Array(%s),\n'
                     '"transitions": PackedFloat32Array(%s),\n"update": 0,\n'
