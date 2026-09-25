@@ -5,33 +5,77 @@
 <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
 <title>skeleton-converter — Godot preview</title>
 <style>
-  body { margin: 0; background: #2b2b2b; color: #eee; font-family: sans-serif; overflow: hidden; }
+  :root {
+    --surface: rgba(12,14,19,.78); --border: #343946;
+    --text: #e8eaf0; --muted: #9aa3b5;
+    --godot: #478cbf; --freeze: #e6a23c;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  body { margin: 0; background: #2b2b2b; color: var(--text); font-family: system-ui, sans-serif; overflow: hidden; }
   #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
   #panel {
-    position: fixed; top: 8px; left: 8px; background: rgba(0,0,0,.55);
-    padding: 8px 10px; border-radius: 6px; max-width: 420px; z-index: 10;
+    position: fixed; top: 44px; left: 10px; background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 9px 12px; border-radius: 14px; z-index: 10;
   }
-  #panel .label { font-size: 12px; color: #aaa; margin-bottom: 4px; }
+  #panel .label { font: 11px var(--mono); letter-spacing: .06em;
+                  text-transform: uppercase; color: #8db8d8; margin-bottom: 6px; }
+  #panel .label b { color: var(--text); font-weight: 400; text-transform: none;
+                    letter-spacing: 0; }
   #panel button {
-    margin: 2px; padding: 4px 10px; border: 0; border-radius: 4px;
-    background: #444; color: #eee; cursor: pointer; font-size: 12px;
+    font: 12px var(--mono); margin-right: 4px; padding: 3px 11px;
+    white-space: nowrap;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
   }
-  #panel button.active { background: #4a6fa5; }
+  #panel button:hover { color: var(--text); border-color: #4a5164; }
+  #panel button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #panel button.active { background: var(--text); border-color: var(--text);
+                         color: #16181f; font-weight: 700; }
+  #attachments-toggle {
+    position: fixed; top: 44px; right: 10px; z-index: 3;
+    font: 11px var(--mono); letter-spacing: .05em; text-transform: uppercase;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 13px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  #attachments-toggle:hover { color: var(--text); border-color: #4a5164; }
+  #attachments-toggle:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #attachments-toggle.active { background: var(--text); color: #16181f;
+                               border-color: var(--text); font-weight: 700; }
+  #attachments {
+    position: fixed; top: 82px; right: 10px; z-index: 2;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 9px 12px; width: 240px;
+    max-height: 80vh; overflow: auto; z-index: 2;
+  }
+  #attachments .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
+  #attachments .slot-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                            white-space: nowrap; color: var(--muted);
+                            font-family: var(--mono); font-size: 11px; }
+  #attachments input { accent-color: var(--godot); cursor: pointer; }
+  #attachments input:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
   #error { position: fixed; left: 8px; bottom: 8px; color: #f66;
            font-size: 12px; max-width: 70vw; z-index: 10; white-space: pre-wrap; }
   #status { position: fixed; inset: 0; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; background: #242424;
-            color: #ddd; font-size: 13px; z-index: 20; }
-  #progress { width: 40%; height: 10px; border: 1px solid #555; margin-top: 8px; }
-  #progress-inner { height: 100%; width: 0; background: #4a6fa5; }
+            align-items: center; justify-content: center; background: #1a1c22;
+            color: var(--muted); font: 13px var(--mono); z-index: 20; }
+  #progress { width: 40%; height: 8px; border: 1px solid var(--border);
+              border-radius: 999px; margin-top: 10px; overflow: hidden; }
+  #progress-inner { height: 100%; width: 0; background: var(--godot); }
+  @media (prefers-reduced-motion: reduce) { #panel button { transition: none; } }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="panel">
-  <div class="label" id="label">loading…</div>
-  <div id="tracks"></div>
+  <div class="label" id="label">godot · loading…</div>
+  <div id="tracks" style="white-space: nowrap"></div>
 </div>
+<button id="attachments-toggle" title="Toggle attachment explorer" hidden>attachments</button>
+<div id="attachments" hidden></div>
 <div id="error"></div>
 <div id="status"><span id="status-notice">loading engine…</span>
   <div id="progress"><div id="progress-inner"></div></div></div>
@@ -48,10 +92,39 @@ const GODOT_THREADS_ENABLED = false;
 // from GDScript once the scene's AnimationPlayer reports its list). Clicking a
 // track calls window.previewPlay(name), which the scene wired to play it.
 window.previewInspectData = function (_csv) { /* replaced by debug probes */ };
+window.previewAttachments = function (json) {
+  // Attachment explorer, the Godot-side twin of the Spine viewer's panel:
+  // each skin attachment is a Polygon2D; visibility is the equip state.
+  const toggle = document.getElementById("attachments-toggle");
+  const box = document.getElementById("attachments");
+  toggle.hidden = false;
+  toggle.onclick = () => {
+    box.hidden = !box.hidden;
+    toggle.classList.toggle("active", !box.hidden);
+  };
+  box.innerHTML = "";
+  JSON.parse(json).forEach(({ name, visible }) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("span");
+    label.className = "slot-name";
+    label.textContent = name;
+    label.title = name;
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = visible;
+    check.onchange = () => {
+      window.previewSetAttachment && window.previewSetAttachment(name, check.checked);
+    };
+    row.appendChild(label);
+    row.appendChild(check);
+    box.appendChild(row);
+  });
+};
 window.previewAnims = function (csv) {
   const names = csv.split(",").filter(Boolean);
   const label = document.getElementById("label");
-  label.textContent = "animations — click a track to play";
+  label.innerHTML = "<b>godot 4.7</b> · click a track to play";
   const box = document.getElementById("tracks");
   names.forEach((name) => {
     const button = document.createElement("button");

@@ -4,22 +4,52 @@
 <meta charset="utf-8">
 <title>skeleton-converter compare</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #1e2129; color: #e8eaf0;
-               font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
-  #bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px;
-         background: #262a34; border-bottom: 1px solid #000; flex-wrap: wrap; }
-  #bar b { margin-right: 8px; }
-  button { padding: 3px 10px; border-radius: 4px; border: 1px solid #444a58;
-           background: #30343f; color: inherit; cursor: pointer; }
-  button.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
-  #stage { display: flex; height: calc(100% - 41px); }
+  :root {
+    --bg: #16181f; --surface: #22252e; --border: #343946;
+    --text: #e8eaf0; --muted: #9aa3b5;
+    --godot: #478cbf; --spine: #f4801f; --freeze: #e6a23c;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+         background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  #bar .brand { font-family: var(--mono); font-size: 12px; font-weight: 700;
+                letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+                margin-right: 4px; }
+  #bar .brand em { font-style: normal; color: var(--text); }
+  #tracks { display: flex; gap: 4px; flex-wrap: wrap; }
+  button { font: 12px var(--mono); padding: 4px 12px; border-radius: 999px;
+           border: 1px solid var(--border); background: transparent;
+           color: var(--muted); cursor: pointer; letter-spacing: .02em;
+           transition: background .12s, color .12s, border-color .12s; }
+  button:hover { color: var(--text); border-color: #4a5164; }
+  button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  button.active { background: var(--text); border-color: var(--text);
+                  color: var(--bg); font-weight: 700; }
+  #freezer { border-color: var(--freeze); color: var(--freeze); font-weight: 700; }
+  #freezer:hover { background: rgba(230,162,60,.12); color: var(--freeze); }
+  #freezer.active { background: var(--freeze); border-color: var(--freeze); color: #16181f; }
+  #freezer.active #tval { color: #16181f; }
+  #gridbtn { padding: 4px 10px; }
+  #gridbtn.active { background: transparent; border-color: var(--freeze);
+                    color: var(--freeze); font-weight: 400; }
+  #stage { display: flex; height: calc(100% - 45px); }
   .pane { position: relative; flex: 1; border-right: 1px solid #000; }
   .pane:last-child { border-right: none; }
-  .pane label { position: absolute; top: 4px; left: 8px; z-index: 2;
-                background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 4px;
-                font-size: 12px; pointer-events: none; }
-  .pane[data-kind="godot"] label::after { content: " · godot wasm"; }
-  .pane[data-kind="spine"] label::after { content: " · spine webgl"; }
+  .pane .tag { position: absolute; top: 10px; left: 10px; z-index: 2;
+               display: flex; align-items: center; gap: 7px;
+               background: rgba(12,14,19,.78); border: 1px solid var(--border);
+               padding: 4px 11px 4px 9px; border-radius: 999px;
+               font: 11px var(--mono); letter-spacing: .05em; pointer-events: none;
+               text-transform: uppercase; color: var(--text); }
+  .pane .tag i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .pane[data-kind="godot"] .tag i { background: var(--godot); }
+  .pane[data-kind="spine"] .tag i { background: var(--spine); }
+  .pane[data-kind="godot"] .tag span { color: #8db8d8; }
+  .pane[data-kind="spine"] .tag span { color: #f0b27a; }
+  .pane[data-kind="godot"] .tag span::after { content: " · Godot 4.7"; }
+  .pane[data-kind="spine"] .tag span::after { content: " · Spine 4.2"; }
   iframe { position: absolute; inset: 0; width: 100%; height: 100%;
            border: 0; background: transparent; }
   /* Alignment grid: identical spacing over both panes, so a feature at the
@@ -39,12 +69,13 @@
       linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
       linear-gradient(0deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
   }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 </style>
 </head>
 <body>
-<div id="bar"><b>compare</b><span id="tracks">loading…</span>
-  <button id="freezer" title="Freeze all panes at the given walk time">⏸ t=<span id="tval">0.0</span></button>
-<button id="gridbtn" title="Toggle alignment grid over every pane">⊞ grid</button>
+<div id="bar"><span class="brand">skeleton·<em>compare</em></span><span id="tracks">loading…</span>
+  <button id="freezer" title="Freeze all panes at the same time">◆ t=<span id="tval">0.0</span></button>
+<button id="gridbtn" title="Toggle alignment grid over every pane" class="active">⊞ grid</button>
 </div>
 <div id="stage"></div>
 <script>
@@ -58,6 +89,7 @@ const PANES = __PANES__;
 const stage = document.getElementById("stage");
 const tracksBox = document.getElementById("tracks");
 const tval = document.getElementById("tval");
+
 let frozen = false;
 let freezeTime = 0.0;
 let currentName = null;  // shell-owned: set by play(), never guessed
@@ -66,8 +98,9 @@ const frames = PANES.map(p => {
   const pane = document.createElement("div");
   pane.className = "pane";
   pane.dataset.kind = p.kind;
-  const label = document.createElement("label");
-  label.textContent = p.label;
+  const label = document.createElement("div");
+  label.className = "tag";
+  label.innerHTML = "<i></i><span>" + p.label.replace(/</g, "&lt;") + "</span>";
   const iframe = document.createElement("iframe");
   iframe.src = p.url;
   const grid = document.createElement("div");
@@ -85,7 +118,7 @@ const frames = PANES.map(p => {
 document.getElementById("gridbtn").onclick = (e) => {
   const on = !frames[0].grid.style.display;
   frames.forEach(f => f.grid.style.display = on ? "none" : "");
-  e.currentTarget.style.background = on ? "" : "#3b82f6";
+  e.currentTarget.classList.toggle("active", !on);
 };
 // start with the grid visible
 frames.forEach(f => f.grid.style.display = "");

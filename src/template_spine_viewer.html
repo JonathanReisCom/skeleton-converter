@@ -4,51 +4,78 @@
 <meta charset="utf-8">
 <title>skeleton-converter viewer</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #1e2129; overflow: hidden; }
+  :root {
+    --bg: #16181f; --surface: rgba(12,14,19,.78); --border: #343946;
+    --text: #e8eaf0; --muted: #9aa3b5;
+    --spine: #f4801f; --freeze: #e6a23c;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   canvas { width: 100%; height: 100%; display: block; touch-action: none; }
   #hud {
-    position: fixed; top: 12px; left: 12px; z-index: 2;
-    font: 13px/1.5 system-ui, sans-serif; color: #dfe3ea;
-    background: rgba(0,0,0,.55); border-radius: 8px; padding: 10px 12px;
+    position: fixed; top: 44px; left: 10px; z-index: 2;
+    font: 13px/1.5 system-ui, sans-serif; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 9px 12px;
   }
+  #hud .label { font: 11px var(--mono); letter-spacing: .06em;
+                text-transform: uppercase; color: #f0b27a; margin-bottom: 6px; }
+  #hud .label b { color: var(--text); font-weight: 400; text-transform: none;
+                  letter-spacing: 0; }
   #hud button {
-    font: inherit; margin-right: 6px; margin-bottom: 4px;
-    background: #3a4152; color: #dfe3ea; border: 0; border-radius: 6px;
-    padding: 4px 10px; cursor: pointer;
+    font: 12px var(--mono); margin-right: 4px; margin-bottom: 4px;
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 3px 11px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
   }
-  #hud button.active { background: #4f8cff; color: #fff; }
+  #hud button:hover { color: var(--text); border-color: #4a5164; }
+  #hud button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #hud button.active { background: var(--text); color: #16181f;
+                       border-color: var(--text); font-weight: 700; }
   #error { color: #ff7b7b; white-space: pre-wrap; }
   #slots {
-    position: fixed; top: 12px; right: 12px; z-index: 2;
-    font: 12px/1.4 system-ui, sans-serif; color: #dfe3ea;
-    background: rgba(0,0,0,.55); border-radius: 8px; padding: 8px 10px;
+    position: fixed; top: 82px; right: 10px; z-index: 2;
+    font: 12px/1.4 system-ui, sans-serif; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 9px 12px;
     max-height: 90vh; overflow: auto; width: 260px;
   }
-  #slots .row { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
+  #slots .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
   #slots .slot-name {
     flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: #9aa3b5;
+    white-space: nowrap; color: var(--muted);
+    font-family: var(--mono); font-size: 11px;
   }
   #slots select {
-    flex: 0 0 auto; max-width: 140px; font: inherit;
-    background: #3a4152; color: #dfe3ea; border: 0; border-radius: 6px;
-    padding: 2px 6px;
+    flex: 0 0 auto; max-width: 140px; font: 11px var(--mono);
+    background: #22252e; color: var(--text); border: 1px solid var(--border);
+    border-radius: 7px; padding: 3px 8px; cursor: pointer;
   }
+  #slots select:hover { border-color: #4a5164; }
+  #slots select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
   #slots-toggle {
-    position: fixed; top: 12px; right: 12px; z-index: 3;
-    font: 13px system-ui, sans-serif; background: #3a4152; color: #dfe3ea;
-    border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+    position: fixed; top: 44px; right: 10px; z-index: 3;
+    font: 11px var(--mono); letter-spacing: .05em; text-transform: uppercase;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 13px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
   }
+  #slots-toggle:hover { color: var(--text); border-color: #4a5164; }
+  #slots-toggle:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #slots-toggle.active { background: var(--text); color: #16181f;
+                         border-color: var(--text); font-weight: 700; }
+  @media (prefers-reduced-motion: reduce) { #hud button { transition: none; } }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
 <div id="hud">
-  <div><strong id="name">…</strong> — click a track to play</div>
-  <div id="tracks"></div>
+  <div class="label"><b>spine 4.2</b> · <span id="name">…</span></div>
+  <div id="tracks" style="white-space: nowrap"></div>
   <div id="error"></div>
 </div>
-<button id="slots-toggle">attachments</button>
+<button id="slots-toggle" title="Toggle attachment explorer">attachments</button>
 <div id="slots" hidden></div>
 <script src="__RUNTIME_URL__"></script>
 <script>
@@ -101,7 +128,11 @@ function setAnimation(name, button) {
 function showAttachments(skeleton) {
   const box = document.getElementById("slots");
   const toggle = document.getElementById("slots-toggle");
-  toggle.onclick = () => { box.hidden = !box.hidden; };
+  const render = () => {
+    box.hidden = !box.hidden;
+    toggle.classList.toggle("active", !box.hidden);
+  };
+  toggle.onclick = render;
   box.innerHTML = "";
   const skins = skeleton.data.skins || [];
   skeleton.slots.forEach(slot => {

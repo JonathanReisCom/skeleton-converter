@@ -17,6 +17,11 @@ var _js_play: JavaScriptObject
 var _js_freeze: JavaScriptObject
 var _js_cam: JavaScriptObject
 var _js_inspect: JavaScriptObject
+var _js_attachments: JavaScriptObject
+var _js_set_attachment: JavaScriptObject
+# Attachment explorer state: Polygon2D name -> node (the converted scene
+# draws each skin attachment as a Polygon2D; visibility = equip toggle).
+var _attachments: Dictionary = {}
 
 func _ready() -> void:
 	var packed: PackedScene = load(SCENE)
@@ -111,7 +116,12 @@ func _ready() -> void:
 		win.previewCamRequest = _js_cam
 		_js_inspect = JavaScriptBridge.create_callback(Callable(self, "_web_inspect"))
 		win.previewInspect = _js_inspect
+		_js_attachments = JavaScriptBridge.create_callback(Callable(self, "_publish_attachments"))
+		win.previewAttachmentsRequest = _js_attachments
+		_js_set_attachment = JavaScriptBridge.create_callback(Callable(self, "_web_set_attachment"))
+		win.previewSetAttachment = _js_set_attachment
 		win.previewAnims(",".join(names))
+		_publish_attachments([])
 
 func _web_inspect(_args: Array) -> void:
 	# Debug hook: report every Bone2D global pose + rest and every polygon
@@ -143,6 +153,26 @@ func _report_cam(_args: Array) -> void:
 		get_viewport().get_visible_rect().size,
 		cam.zoom if cam else Vector2.ONE,
 		cam.global_position if cam else Vector2.ZERO])
+
+func _publish_attachments(_args: Array) -> void:
+	# Attachment explorer: every skin attachment is a Polygon2D in the
+	# converted scene; visibility is the equip state. Publish name + visible
+	# so the viewer shell can render the same explorer the Spine pane has.
+	var win := JavaScriptBridge.get_interface("window")
+	var items := []
+	for poly in _collect(_scene_root, Polygon2D):
+		_attachments[poly.name] = poly
+		items.append({"name": poly.name, "visible": poly.visible})
+	win.previewAttachments(JSON.stringify(items))
+
+func _web_set_attachment(args: Array) -> void:
+	# Bridge flattens: previewSetAttachment("L_hand", true) -> ["L_hand", true].
+	if args.size() < 2 or _attachments.is_empty():
+		return
+	var poly: Polygon2D = _attachments.get(str(args[0]))
+	if poly == null:
+		return
+	poly.visible = bool(args[1])
 
 func _capture_setup_pose() -> void:
 	# Snapshot every property any animation track touches, so a switch can
