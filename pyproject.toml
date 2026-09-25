@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skeleton-converter"
+version = "0.1.0"
+description = "Bidirectional 2D skeletal rig converter: Godot 4 Skeleton2D scenes (.tscn) <-> Spine JSON"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jonathan Reis" }]
+keywords = ["godot", "spine", "2d", "skeletal-animation", "converter"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Editors :: Vector-Based",
+]
+# The converter is stdlib-only by design (see AGENTS.md); this list stays empty.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/JonathanReisCom/skeleton-converter"
+Issues = "https://github.com/JonathanReisCom/skeleton-converter/issues"
+
+[project.scripts]
+skeleton-converter = "src.cli:main"
+
+[tool.setuptools]
+# src.godot_preview ships the wrapper project the web preview builds from, so
+# it is part of the installed package, not just of the repo tree.
+packages = ["src", "src.godot_preview"]
+
+[tool.setuptools.package-data]
+# The viewer shells are read at runtime; a wheel without them cannot emit a
+# preview. Same for the Godot wrapper project files.
+src = ["*.html"]
+"src.godot_preview" = ["*.tscn", "*.gd", "*.cfg", "project.godot"]
