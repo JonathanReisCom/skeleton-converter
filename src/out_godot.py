@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from .model import Skeleton, godot_transform2d, invert, multiply
-from .out_spine import group_triangles
+from .model import Skeleton, godot_transform2d, godot_rest_worlds, invert, multiply
+from .model import group_triangles
 
 
 def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs, texture_path):
@@ -48,7 +48,7 @@ def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs,
 def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kwargs) -> None:
     """Emit a .tscn with SkeletonRoot → Sprite2D → Skeleton2D → bones and
     Polygons → Polygon2D per attachment, plus an AnimationPlayer."""
-    world = _godot_rest_worlds(model)
+    world = godot_rest_worlds(model)
     bone_nodes = _emit_bones(model, world)
     polygon_nodes = _emit_attachments(model, world, texture_path)
     animation_resources, animation_refs = _emit_animations(model)
@@ -63,20 +63,6 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
 # bones
 # ---------------------------------------------------------------------------
 
-
-def _godot_rest_worlds(model) -> dict:
-    """bone name → world matrix at rest (product of local transforms)."""
-    world = {}
-    for bone in model.bones:
-        parent = world.get(bone.parent, (1, 0, 0, 1, 0, 0))
-        cos, sin = math.cos(math.radians(bone.rotation_deg)), math.sin(math.radians(bone.rotation_deg))
-        sx, sy = bone.scale
-        world[bone.name] = multiply(parent, (
-            cos * sx, -sin * sx,
-            sin * sy, cos * sy,
-            bone.position[0], bone.position[1],
-        ))
-    return world
 
 
 def _emit_bones(model, world):

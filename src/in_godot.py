@@ -6,7 +6,7 @@ import math
 import re
 from pathlib import Path
 
-from .model import Attachment, Bone, Skeleton
+from .model import Attachment, Bone, Skeleton, spine_inverse
 
 # ---------------------------------------------------------------------------
 # .tscn text parsing
@@ -282,20 +282,6 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
     return tracks
 
 
-def _spine_inverse(kind: str, axis: str | None, bone: Skeleton):
-    """Godot track value -> spine offset: the inverse of each writer's affine
-    map. Curve control points live in the offset space of the raw JSON values,
-    which is what every writer maps through."""
-    if kind == "rotate":
-        # godot = rotation_deg - offset  (angle = -(setup_spine + offset))
-        return lambda v: bone.rotation_deg - v
-    if axis == "x":
-        # godot = offset + setup_x
-        return lambda v: v - bone.position[0]
-    # godot = -(offset + setup_y) = -offset + position[1]
-    return lambda v: bone.position[1] - v
-
-
 def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
     """Bezier track points -> key dicts with a spine-space ``curve`` per key.
 
@@ -305,7 +291,7 @@ def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
     mapped back through the writer's affine transform (Godot -> spine).
     """
     bone = model.by_name.get(bone_name) if model else None
-    to_spine = _spine_inverse("rotate" if kind == "rotate" else "translate",
+    to_spine = spine_inverse("rotate" if kind == "rotate" else "translate",
                               axis, bone) if bone else (lambda v: v)
     n = len(times)
     values = [points[i * 5] for i in range(n)]

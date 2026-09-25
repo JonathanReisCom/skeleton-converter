@@ -1112,7 +1112,7 @@ def _bezier_table(curve: list, axis: int, step: int, time1: float,
     ``axis`` selects the VALUE curve (0 for x/rotate, 1 for y); the TIME curve
     is always axis 0 when a value axis exists. Returns (time, value).
     """
-    from .out_spine import bezier_table_point
+    from .model import bezier_table_point
     time_point = bezier_table_point(curve, 0, step, time1, time2, value1, value2)
     if axis == 0:
         return time_point

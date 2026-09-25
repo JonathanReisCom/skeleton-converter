@@ -1,4 +1,4 @@
-"""Write the canonical model as Spine JSON + .atlas, and as a Godot .tscn scene."""
+"""Write the canonical model as Spine JSON + .atlas."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .model import (
     Attachment, Skeleton,
-    compose, godot_transform2d, invert, mirror_point, multiply, transform,
+    compose, godot_transform2d, godot_rest_worlds, invert, mirror_point, mirror_world, multiply, transform,
     godot_world_transforms,
 )
 
@@ -38,30 +38,6 @@ def read_png_size(path: str) -> tuple | None:
         int.from_bytes(header[20:24], "big"),
     )
 
-
-def _godot_rest_worlds(model) -> dict:
-    """bone name -> GLOBAL REST world in Godot space, chained from Bone2D
-    rests (not node poses). Godot skins meshes with pose * global_rest^-1,
-    so this — not the node-pose world — is the bind basis for mesh locals.
-    Bones without an explicit rest fall back to their node pose (Spine
-    authoring, where bind == setup)."""
-    world = {}
-    for bone in model.bones:
-        pos, rot_deg, scale = bone.rest or (
-            bone.position, bone.rotation_deg, bone.scale)
-        parent = world.get(bone.parent, (1, 0, 0, 1, 0, 0))
-        cos, sin = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
-        sx, sy = scale
-        world[bone.name] = multiply(parent, (
-            cos * sx, sin * sx, -sin * sy, cos * sy, pos[0], pos[1]))
-    return world
-
-
-def mirror_world(world: tuple) -> tuple:
-    """A Spine-space bone transform: conjugate the Godot one by the y flip
-    (F·A·F⁻¹), mirroring translation and rotation columns."""
-    a, b, c, d, tx, ty = world
-    return (a, -b, -c, d, tx, -ty)
 
 
 def resolve_texture_path(texture_path: str, scene_path: str) -> str | None:
@@ -210,31 +186,6 @@ def _bake_track(keys: list, curves: list) -> tuple:
     return baked_keys, baked_transitions
 
 
-def bezier_table_point(curve: list, axis: int, step: int,
-                       time1: float, time2: float, value1: float, value2: float) -> tuple:
-    if not isinstance(curve, (list, tuple)) or len(curve) < axis * 4 + 4:
-        fraction = step / 10.0
-        return (time1 + (time2 - time1) * fraction, value1 + (value2 - value1) * fraction)
-    cx1, cy1, cx2, cy2 = (float(curve[axis * 4 + i]) for i in range(4))
-    tmpx = (time1 - cx1 * 2 + cx2) * 0.03
-    tmpy = (value1 - cy1 * 2 + cy2) * 0.03
-    dddx = ((cx1 - cx2) * 3 - time1 + time2) * 6e-3
-    dddy = ((cy1 - cy2) * 3 - value1 + value2) * 6e-3
-    ddx = tmpx * 2 + dddx
-    ddy = tmpy * 2 + dddy
-    dx = (cx1 - time1) * 0.3 + tmpx + dddx * 0.16666667
-    dy = (cy1 - value1) * 0.3 + tmpy + dddy * 0.16666667
-    x = time1 + dx
-    y = value1 + dy
-    for _ in range(1, step):
-        dx += ddx
-        dy += ddy
-        ddx += dddx
-        ddy += dddy
-        x += dx
-        y += dy
-    return (x, y)
-
 
 def map_curve_to_godot(curve, axis: int, offset: float, negate: bool):
     """Map one bezier segment's control values into Godot's value space."""
@@ -249,12 +200,6 @@ def map_curve_to_godot(curve, axis: int, offset: float, negate: bool):
         mapped[index] = -control + offset if negate else control + offset
     return mapped
 
-
-def group_triangles(triangles: list) -> list:
-    return [
-        [triangles[i], triangles[i + 1], triangles[i + 2]]
-        for i in range(0, len(triangles) - 2, 3)
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +310,7 @@ def write_spine_json(model: Skeleton, output_path: str,
             # rendered 16.5° off). rest_world is godot space; mirror_world
             # conjugates it into Spine space.
             spine_rest = {bone_name: mirror_world(transform_matrix)
-                          for bone_name, transform_matrix in _godot_rest_worlds(model).items()}
+                          for bone_name, transform_matrix in godot_rest_worlds(model).items()}
             for vertex_index, vertex in enumerate(polygon):
                 world_point = transform(
                     polygon_world, (vertex[0] + att["offset"][0], vertex[1] + att["offset"][1])
