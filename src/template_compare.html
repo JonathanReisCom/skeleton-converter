@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>skeleton-converter compare — Godot (left) vs Spine (right)</title>
+<title>skeleton-converter compare</title>
 <style>
   html, body { margin: 0; height: 100%; background: #1e2129; color: #e8eaf0;
                font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
@@ -18,33 +18,44 @@
   .pane label { position: absolute; top: 4px; left: 8px; z-index: 2;
                 background: rgba(0,0,0,.55); padding: 2px 8px; border-radius: 4px;
                 font-size: 12px; pointer-events: none; }
+  .pane[data-kind="godot"] label::after { content: " · godot wasm"; }
+  .pane[data-kind="spine"] label::after { content: " · spine webgl"; }
   iframe { position: absolute; inset: 0; width: 100%; height: 100%;
            border: 0; background: transparent; }
 </style>
 </head>
 <body>
 <div id="bar"><b>compare</b><span id="tracks">loading…</span>
-  <button id="freezer" title="Freeze both at the given walk time">⏸ t=<span id="tval">0.0</span></button>
+  <button id="freezer" title="Freeze all panes at the given walk time">⏸ t=<span id="tval">0.0</span></button>
 </div>
-<div id="stage">
-  <div class="pane"><label>Godot engine (wasm)</label>
-    <iframe id="godot" src="__GODOT_URL__"></iframe></div>
-  <div class="pane"><label>Spine runtime (webgl)</label>
-    <iframe id="spine" src="__SPINE_URL__"></iframe></div>
-</div>
+<div id="stage"></div>
 <script>
 "use strict";
-// Compare shell: two existing preview pages side by side with shared
-// controls. It drives each page through the handles they already publish —
+// Compare shell: N typed panes (godot / spine) side by side with shared
+// controls. Each pane is driven through the protocol it already publishes —
 // previewPlay/previewFreeze (Godot wrapper) and window.__state (Spine
 // viewer). Iframes are same-origin (one http.server serves the parent
 // folder), so the parent may reach into them directly.
-const godotFrame = document.getElementById("godot");
-const spineFrame = document.getElementById("spine");
+const PANES = __PANES__;
+const stage = document.getElementById("stage");
 const tracksBox = document.getElementById("tracks");
 const tval = document.getElementById("tval");
 let frozen = false;
 let freezeTime = 0.0;
+
+const frames = PANES.map(p => {
+  const pane = document.createElement("div");
+  pane.className = "pane";
+  pane.dataset.kind = p.kind;
+  const label = document.createElement("label");
+  label.textContent = p.label;
+  const iframe = document.createElement("iframe");
+  iframe.src = p.url;
+  pane.appendChild(label);
+  pane.appendChild(iframe);
+  stage.appendChild(pane);
+  return { kind: p.kind, label: p.label, iframe };
+});
 
 function whenLoaded(iframe, test, attempt) {
   attempt = attempt || 0;
@@ -57,14 +68,32 @@ function whenLoaded(iframe, test, attempt) {
     () => whenLoaded(iframe, test, attempt + 1));
 }
 
-const godotReady = whenLoaded(godotFrame, w => typeof w.previewPlay === "function");
-const spineReady = whenLoaded(spineFrame, w => w.__state && w.__skeleton);
+const ready = frames.map(f =>
+  f.kind === "spine"
+    ? whenLoaded(f.iframe, w => w.__state && w.__skeleton)
+    : whenLoaded(f.iframe, w => typeof w.previewPlay === "function"));
+let paneReady = [];  // resolved pane windows, aligned with frames
 
-Promise.all([godotReady, spineReady]).then(([g, s]) => {
-  // Animation list: prefer the Godot shell's CSV; fall back to the Spine data
-  // (the two bundles share the same animation names — one converts to the
-  // other). The Godot wrapper does not publish a list as a plain property.
-  const names = s.__skeleton.data.animations.map(a => a.name);
+function godotAnimNames(pane) {
+  // The Godot wrapper builds its own track buttons from window.previewAnims;
+  // read the names back from its DOM (same origin).
+  try {
+    const names = [...pane.iframe.contentDocument
+      .querySelectorAll("button")].map(b => b.textContent);
+    return names.length ? names : null;
+  } catch (e) { return null; }
+}
+
+Promise.all(ready).then(ws => {  paneReady = ws;
+  const spineFrame = frames.find(f => f.kind === "spine");
+  let names = null;
+  if (spineFrame) {
+    const w = paneReady[frames.indexOf(spineFrame)];
+    names = w.__skeleton.data.animations.map(a => a.name);
+  } else {
+    names = godotAnimNames(frames[0]);
+  }
+  if (!names) { tracksBox.textContent = "(waiting for animation names)"; return; }
   tracksBox.textContent = "";
   names.forEach(name => {
     const b = document.createElement("button");
@@ -81,16 +110,20 @@ function clearActive() {
 function play(name, button) {
   clearActive();
   if (button) button.classList.add("active");
-  godotReady.then(g => g.previewPlay(name));
-  spineReady.then(w => {
-    const state = w.__state, sk = w.__skeleton;
-    state.data.defaultMix = 0;
-    state.setAnimation(0, name, true);
-    if (frozen) freezeAt(name, freezeTime, state, sk);
+  frames.forEach((f, i) => {
+    if (f.kind === "spine") {
+      const w = paneReady[i];
+      const state = w.__state, sk = w.__skeleton;
+      state.data.defaultMix = 0;
+      state.setAnimation(0, name, true);
+      if (frozen) freezeSpineAt(name, freezeTime, state, sk);
+    } else {
+      paneReady[i].previewPlay(name);
+    }
   });
 }
 
-function freezeAt(name, t, state, sk) {
+function freezeSpineAt(name, t, state, sk) {
   const entry = state.getCurrent(0);
   if (entry) { entry.timeScale = 0; entry.trackTime = t; }
   state.update(0); state.apply(sk);
@@ -100,20 +133,24 @@ function freezeAt(name, t, state, sk) {
 document.getElementById("freezer").onclick = () => {
   frozen = !frozen;
   document.getElementById("freezer").classList.toggle("active", frozen);
+  const active = tracksBox.querySelector("button.active");
   if (!frozen) {
-    godotReady.then(g => {
-      const active = tracksBox.querySelector("button.active");
-      if (active) g.previewPlay(active.textContent);
+    frames.forEach((f, i) => {
+      if (f.kind === "godot" && active) paneReady[i].previewPlay(active.textContent);
+      if (f.kind === "spine") {
+        const e = paneReady[i].__state.getCurrent(0);
+        if (e) e.timeScale = 1;
+      }
     });
-    spineReady.then(w => { const e = w.__state.getCurrent(0); if (e) e.timeScale = 1; });
     return;
   }
-  const active = tracksBox.querySelector("button.active");
   const name = active ? active.textContent : "walk";
   freezeTime = Math.round((freezeTime + 0.3) * 10) / 10;
   tval.textContent = freezeTime.toFixed(1);
-  godotReady.then(g => g.previewFreeze(name, freezeTime));
-  spineReady.then(w => freezeAt(name, freezeTime, w.__state, w.__skeleton));
+  frames.forEach((f, i) => {
+    if (f.kind === "godot") paneReady[i].previewFreeze(name, freezeTime);
+    else freezeSpineAt(name, freezeTime, paneReady[i].__state, paneReady[i].__skeleton);
+  });
 };
 </script>
 </body>

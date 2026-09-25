@@ -39,6 +39,13 @@
 - [ ] Godot-side FK drift: a converted `.tscn` accumulates ~0.19 units per
       bone along a chain (~0.42 after four), independent of constraints. It
       predates the constraint work and is the largest remaining error source
+- [ ] Skin attachments whose slot has no setup attachment are rendered by the
+      Godot leg but never drawn by the Spine runtime (setup attachment `None`,
+      and these animations carry no attachment timelines) — side-by-side
+      compare shows Godot drawing unequipped props (armor/props of the
+      `Solt :` slots) that the source hides. Fix shape: mirror the runtime's
+      equipping (slot setup attachment + attachment timelines) instead of
+      drawing every skin attachment
 - [ ] A native Godot scene's `Sprite2D` position offset is not representable
       in Spine (which has no scene-level offset — only bones). Measured victim:
       the official hero demo's `Sprite2D.position = (0, -15)`; the converted

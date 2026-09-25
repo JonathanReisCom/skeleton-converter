@@ -152,8 +152,14 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         else:
             texture_ref = "res://image.png"
         out_godot.write_godot_scene(model, str(output), texture_path=texture_ref)
+        # One stem for the whole bundle: the scene references
+        # res://<name>.<ext>, so the texture is copied under the bundle stem
+        # (the atlas may name the page differently, e.g. "custom assets.png"
+        # for an "animation" bundle).
+        texture_file = None
         if image and not texture and Path(image).exists():
-            dest = out / (name + Path(image).suffix)
+            texture_file = name + Path(image).suffix
+            dest = out / texture_file
             if Path(image).resolve() != dest.resolve():
                 shutil.copy2(image, dest)
         # Artifacts live in output/ next to the browser shell; the web preview
@@ -161,9 +167,8 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         artifacts = out / "output"
         artifacts.mkdir(exist_ok=True)
         shutil.move(str(output), artifacts / output.name)
-        if image and not texture and (out / Path(image).name).exists():
-            shutil.move(str(out / Path(image).name),
-                        artifacts / Path(image).name)
+        if texture_file and (out / texture_file).exists():
+            shutil.move(str(out / texture_file), artifacts / texture_file)
         result.files = [artifacts / output.name]
         result.texture = texture_ref
         wrote = f"output/{output.name}"
@@ -226,8 +231,8 @@ def view(skeleton_json: str) -> Path:
 
 def compare_page(godot_dir: str, spine_dir: str) -> Path:
     """Write compare.html into the parent of both preview bundles (one HTML
-    page, both bundles in iframes with shared play/freeze controls); return
-    its path. Serve the parent folder with any static server."""
+    page, typed panes with shared play/freeze controls); return its path.
+    Serve the parent folder with any static server."""
     from .compare_out import emit_compare
     return Path(emit_compare(Path(godot_dir), Path(spine_dir)))
 

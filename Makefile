@@ -53,7 +53,7 @@ godot-to-spine:
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(OUTPUT_GODOT_TO_SPINE)"; \
+	  $(PYTHON) -m src.devserver $(GODOT_PORT) "$(OUTPUT_GODOT_TO_SPINE)"; \
 	fi
 
 # Spine JSON -> .tscn + the page image, then serve the Godot web preview. The
@@ -78,7 +78,7 @@ spine-to-godot:
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(SPINE_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(SPINE_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(OUTPUT_SPINE_TO_GODOT)"; \
+	  $(PYTHON) -m src.devserver $(SPINE_PORT) "$(OUTPUT_SPINE_TO_GODOT)"; \
 	fi
 
 # Pack an existing Godot scene (.tscn) and run it in the browser: the real
@@ -105,7 +105,7 @@ preview_scene('$(INPUT_GODOT_PREVIEW)', '$(OUTPUT_GODOT_PREVIEW)', '$(NAME)')"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(GODOT_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(OUTPUT_GODOT_PREVIEW)"; \
+	  $(PYTHON) -m src.devserver $(GODOT_PORT) "$(OUTPUT_GODOT_PREVIEW)"; \
 	fi
 
 # Browser preview of a Spine rig (JSON + .atlas + page image) via the pinned
@@ -129,28 +129,13 @@ spine_preview('$(INPUT_SPINE_PREVIEW)', '$(OUTPUT_SPINE_PREVIEW)')"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(SPINE_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(SPINE_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(OUTPUT_SPINE_PREVIEW)"; \
+	  $(PYTHON) -m src.devserver $(SPINE_PORT) "$(OUTPUT_SPINE_PREVIEW)"; \
 	fi
 
-# Start every preview server from PREVIEWS (local.mk): "path:port path:port".
-# Detached with nohup, so make returns; logs go to /dev/null. Ports already
-# in use are skipped (a server for that folder is probably already running).
-previews:
-	@for pair in $(PREVIEWS); do \
-	  dir="$${pair%%:*}"; port="$${pair##*:}"; \
-	  test -d "$$dir" || { echo "--> skip $$dir (folder does not exist)"; continue; }; \
-	  if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$$port"; then \
-	    echo "--> port $$port already in use — skipping $$dir"; \
-	  else \
-	    echo "--> serving $$dir on http://localhost:$$port/"; \
-	    nohup $(PYTHON) -m http.server $$port --directory "$$dir" >/dev/null 2>&1 & \
-	  fi; \
-	done; \
-	echo "--> all servers started detached. Stop with: make previews-stop"
-
-# Side-by-side compare shell: one page, both preview bundles in iframes,
-# shared play/freeze controls. Serves the bundles' PARENT folder (one origin
-# for both iframes). COMPARE_GODOT/COMPARE_SPINE come from local.mk.
+# Side-by-side compare shell: one page, two preview bundles in typed panes
+# (godot wasm and/or spine webgl), shared play/freeze controls. Serves the
+# bundles' PARENT folder (one origin for both iframes). COMPARE_GODOT and
+# COMPARE_SPINE come from local.mk.
 COMPARE_PORT ?= 8083
 compare:
 	@test -f "$(COMPARE_GODOT)/index.html" || { \
@@ -163,14 +148,8 @@ compare_page('$(COMPARE_GODOT)', '$(COMPARE_SPINE)')"
 	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(COMPARE_PORT))) == 0 else 1)'; then \
 	  echo "--> port $(COMPARE_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
-	  $(PYTHON) -m http.server $(COMPARE_PORT) --directory "$(COMPARE_GODOT)/.."; \
+	  $(PYTHON) -m src.devserver $(COMPARE_PORT) "$(COMPARE_GODOT)/.."; \
 	fi
-
-previews-stop:
-	@for pair in $(PREVIEWS); do \
-	  port="$${pair##*:}"; \
-	  lsof -ti :$$port 2>/dev/null | xargs kill 2>/dev/null && echo "--> stopped :$$port" || echo "--> :$$port was not running"; \
-	done
 
 test:
 	$(PYTHON) -m pytest tests/ -v

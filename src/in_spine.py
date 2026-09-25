@@ -28,19 +28,31 @@ def read_spine(path: str) -> dict:
 
 
 def read_atlas_regions(atlas_path: str | None) -> dict:
-    """Region name -> {x, y, width, height, degrees, originalWidth, ...}."""
+    """Region name -> {x, y, width, height, degrees, originalWidth, ...}.
+
+    Handles both atlas layouts: the legacy one (attribute lines indented
+    under the region name) and Spine 4.x's compact one (every line
+    flush-left; keys like ``size:``/``bounds:`` carry a colon, region and
+    page names do not).
+    """
     regions = {}
     if not atlas_path or not Path(atlas_path).exists():
         return regions
+    import re
     current = None
     for line in Path(atlas_path).read_text().splitlines():
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             current = None
             continue
-        if line.startswith((" ", "\t")):
+        key, sep, value = stripped.partition(":")
+        is_attr = bool(sep) and re.fullmatch(r"[a-zA-Z_]+", key.strip())
+        if re.search(r"\.(png|jpg|webp)$", stripped, re.I):
+            current = None  # page boundary
+            continue
+        if is_attr:
             if current is None:
                 continue
-            key, _, value = line.strip().partition(":")
             key = key.strip()
             value = value.strip()
             if key == "bounds":
@@ -65,7 +77,7 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
                     regions[current]["originalWidth"] = orig[0]
                     regions[current]["originalHeight"] = orig[1]
             continue
-        current = line.strip()
+        current = stripped
     return regions
 
 
