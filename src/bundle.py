@@ -42,11 +42,15 @@ class CompareResult:
 def _find_atlas(input_path: Path) -> str | None:
     """Spine atlas beside the input JSON. The atlas name does not always
     mirror the JSON's (hero-pro.json ships with hero.atlas), so fall back to
-    the only .atlas beside the input."""
-    sibling = input_path.with_suffix(".atlas")
-    if sibling.exists():
-        return str(sibling)
-    candidates = sorted(input_path.parent.glob("*.atlas"))
+    the only .atlas beside the input. Spine also exports ``<name>.atlas.txt``
+    for Git-friendly hosting; accept that suffix too."""
+    for suffix in (".atlas", ".atlas.txt"):
+        sibling = input_path.parent / (input_path.stem + suffix)
+        if sibling.exists():
+            return str(sibling)
+    candidates = sorted(
+        p for p in input_path.parent.glob("*.atlas*")
+        if p.suffix in (".atlas", ".txt"))
     return str(candidates[0]) if len(candidates) == 1 else None
 
 
@@ -226,3 +230,28 @@ def compare_page(godot_dir: str, spine_dir: str) -> Path:
     its path. Serve the parent folder with any static server."""
     from .compare_out import emit_compare
     return Path(emit_compare(Path(godot_dir), Path(spine_dir)))
+
+
+def spine_preview(skeleton_json: str, out_dir: str) -> Path:
+    """Pack a Spine rig (JSON + .atlas + page image) into ``out_dir`` and
+    emit a viewer index.html beside it; return the index.html path. The page
+    image is resolved from the atlas's first line — the atlas names it, the
+    JSON does not."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    src = Path(skeleton_json)
+    shutil.copy2(src, out / src.name)
+    atlas = _find_atlas(src)
+    if atlas:
+        atlas_path = Path(atlas)
+        # The viewer derives the atlas URL from the JSON's stem; a Git-hosted
+        # `.atlas.txt` is copied renamed so that URL resolves.
+        atlas_name = src.stem + ".atlas"
+        shutil.copy2(atlas_path, out / atlas_name)
+        # The atlas may hold several pages (page2, page3, ...): every line
+        # naming a .png that exists beside the atlas is a page to copy.
+        for line in atlas_path.read_text(encoding="utf-8").splitlines():
+            page = line.strip()
+            if page.endswith(".png") and (atlas_path.parent / page).exists():
+                shutil.copy2(atlas_path.parent / page, out / page)
+    return view(str(out / src.name))

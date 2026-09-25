@@ -33,7 +33,7 @@ SPINE_INPUT ?=
 GODOT_OUT ?= $(HOME)/Desktop/convert-godot-to-spine
 SPINE_OUT ?= $(HOME)/Desktop/convert-spine-to-godot
 
-.PHONY: godot-to-spine spine-to-godot godot-preview test
+.PHONY: godot-to-spine spine-to-godot godot-preview spine-preview test
 
 # .tscn -> Spine JSON + .atlas + texture + viewer.html, then serve the folder.
 # Ctrl+C stops the server; the output stays on disk.
@@ -106,6 +106,30 @@ preview_scene('$(INPUT_GODOT_PREVIEW)', '$(OUTPUT_GODOT_PREVIEW)', '$(NAME)')"
 	  echo "--> port $(GODOT_PORT) already in use — a previous server is probably still up; open the URL above"; \
 	else \
 	  $(PYTHON) -m http.server $(GODOT_PORT) --directory "$(OUTPUT_GODOT_PREVIEW)"; \
+	fi
+
+# Browser preview of a Spine rig (JSON + .atlas + page image) via the pinned
+# spine-webgl viewer. Input is the .json; the .atlas and page image are
+# resolved beside it the same way the reader does. Everything can be
+# overridden: make spine-preview SPINE_INPUT=... SPINE_PREVIEW_OUT=...
+SPINE_PORT ?= 8644
+spine-preview:
+	@test -n "$(INPUT_SPINE_PREVIEW)" || { \
+	  echo "error: INPUT_SPINE_PREVIEW is empty. Set it in local.mk, e.g."; \
+	  echo "  INPUT_SPINE_PREVIEW := ~/path/to/rig.json"; \
+	  exit 1; }
+	@test -f "$(INPUT_SPINE_PREVIEW)" || { \
+	  echo "error: JSON not found: $(INPUT_SPINE_PREVIEW)"; exit 1; }
+	@test -n "$(OUTPUT_SPINE_PREVIEW)" && test "$(OUTPUT_SPINE_PREVIEW)" != "/" || { \
+	  echo "error: refusing to write OUTPUT_SPINE_PREVIEW='$(OUTPUT_SPINE_PREVIEW)'"; exit 1; }
+	@echo "--> packing $(INPUT_SPINE_PREVIEW) into $(OUTPUT_SPINE_PREVIEW)"
+	@$(PYTHON) -c "from src.bundle import spine_preview; \
+spine_preview('$(INPUT_SPINE_PREVIEW)', '$(OUTPUT_SPINE_PREVIEW)')"
+	@echo "--> serving on http://localhost:$(SPINE_PORT)/  (Ctrl+C stops)"
+	@if $(PYTHON) -c 'import socket,sys; sys.exit(0 if socket.socket().connect_ex(("127.0.0.1", $(SPINE_PORT))) == 0 else 1)'; then \
+	  echo "--> port $(SPINE_PORT) already in use — a previous server is probably still up; open the URL above"; \
+	else \
+	  $(PYTHON) -m http.server $(SPINE_PORT) --directory "$(OUTPUT_SPINE_PREVIEW)"; \
 	fi
 
 # Start every preview server from PREVIEWS (local.mk): "path:port path:port".

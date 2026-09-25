@@ -18,6 +18,27 @@
   }
   #hud button.active { background: #4f8cff; color: #fff; }
   #error { color: #ff7b7b; white-space: pre-wrap; }
+  #slots {
+    position: fixed; top: 12px; right: 12px; z-index: 2;
+    font: 12px/1.4 system-ui, sans-serif; color: #dfe3ea;
+    background: rgba(0,0,0,.55); border-radius: 8px; padding: 8px 10px;
+    max-height: 90vh; overflow: auto; width: 260px;
+  }
+  #slots .row { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
+  #slots .slot-name {
+    flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: #9aa3b5;
+  }
+  #slots select {
+    flex: 0 0 auto; max-width: 140px; font: inherit;
+    background: #3a4152; color: #dfe3ea; border: 0; border-radius: 6px;
+    padding: 2px 6px;
+  }
+  #slots-toggle {
+    position: fixed; top: 12px; right: 12px; z-index: 3;
+    font: 13px system-ui, sans-serif; background: #3a4152; color: #dfe3ea;
+    border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -27,6 +48,8 @@
   <div id="tracks"></div>
   <div id="error"></div>
 </div>
+<button id="slots-toggle">attachments</button>
+<div id="slots" hidden></div>
 <script src="__RUNTIME_URL__"></script>
 <script>
 "use strict";
@@ -70,6 +93,52 @@ function setAnimation(name, button) {
   state.setAnimation(0, name, true);
 }
 
+// Attachment explorer: the editor-equivalent control per slot. Lists every
+// attachment any skin maps to the slot (keyed by slot index) plus "(none)".
+// Some rigs (template dummies) leave color objects unequipped — setup is
+// None and no attachment timeline equips them; this panel lets the user
+// toggle them like the Spine Editor's slot checkboxes.
+function showAttachments(skeleton) {
+  const box = document.getElementById("slots");
+  const toggle = document.getElementById("slots-toggle");
+  toggle.onclick = () => { box.hidden = !box.hidden; };
+  box.innerHTML = "";
+  const skins = skeleton.data.skins || [];
+  skeleton.slots.forEach(slot => {
+    const idx = slot.data.index;
+    const names = new Set();
+    skins.forEach(skin => {
+      const map = skin.attachments && skin.attachments[idx];
+      if (map) Object.keys(map).forEach(n => names.add(n));
+    });
+    if (!names.size) return;
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("span");
+    label.className = "slot-name";
+    label.textContent = slot.data.name;
+    label.title = slot.data.name;
+    const sel = document.createElement("select");
+    const none = document.createElement("option");
+    none.textContent = "(none)";
+    sel.appendChild(none);
+    [...names].sort().forEach(n => {
+      const o = document.createElement("option");
+      o.textContent = n;
+      sel.appendChild(o);
+    });
+    sel.value = slot.attachment ? slot.attachment.name : "";
+    sel.onchange = () => {
+      const att = sel.value
+        ? skeleton.data.defaultSkin.getAttachment(idx, sel.value) : null;
+      slot.setAttachment(att);
+    };
+    row.appendChild(label);
+    row.appendChild(sel);
+    box.appendChild(row);
+  });
+}
+
 new spine.SpineCanvas(canvas, {
   pathPrefix: "",
   webglConfig: { alpha: true },
@@ -109,6 +178,11 @@ new spine.SpineCanvas(canvas, {
       camera.zoom = Math.max(size.x / canvas.clientWidth, size.y / canvas.clientHeight) * 1.2;
 
       showTracks(state.data);
+      showAttachments(skeleton);
+      // Premultiplied-alpha atlases (pma:true) need the flag on the renderer
+      // or regions sample washed; non-PMA atlases (the default) are unchanged.
+      app.renderer.premultipliedAlpha =
+        (atlas.pages || []).some(p => p.pma);
     },
     update: (app, delta) => {
       if (state) {
