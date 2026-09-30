@@ -180,6 +180,18 @@ Semantics worth knowing when debugging a frozen compare:
   nothing for a track an animation does not touch, and the Godot wrapper
   mirrors that. A "wrong limb" under one animation often means one engine
   carries a residue the other does not.
+- **Framing measures drawn vertices, never bone positions.** A runtime frames
+  what it draws — spine's `getBounds` walks attachments. A converted rig's
+  weapon and chain bones hang past the artwork: including `Bone2D.global_position`
+  stretched the box to x=196 where the drawn rig ends at 91, pushing the camera
+  52 units right and leaving the character off centre **on X only**, because
+  those bones stick out sideways. Vertices use Godot's own skinning rule
+  (`pose * global_rest⁻¹`, the same basis `model.py` states for every exporter).
+- **A skinned `Polygon2D` keeps bone/weight PAIRS in `bones`** —
+  `[path, weights, path, weights, …]`, one `PackedFloat32Array` per bone. There
+  is **no** `weights` property: reading `poly.weights` is a runtime error that
+  aborts `_ready` and leaves the pane black with no visible cause. Checked by
+  running the engine headless, not by reading the docs.
 
 ## Attachment explorer (both panes)
 

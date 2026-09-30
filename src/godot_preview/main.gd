@@ -53,17 +53,20 @@ func _ready() -> void:
 	for tree in _collect(instance, AnimationTree):
 		tree.active = false
 
-	# Camera: same framing recipe as the Spine viewer template — bounds over
-	# bones AND attachment vertices, fit both axes, 1.2 margin — so both
+	# Camera: same framing recipe as the Spine viewer template — the drawn
+	# vertices of every visible attachment, fit both axes, 1.2 margin — so both
 	# previews frame the rig identically for side-by-side inspection.
+	#
+	# Vertices ONLY, never the bones' own positions. A runtime frames what it
+	# draws (spine's getBounds walks attachments), and the rig's weapon and
+	# chain bones hang past the artwork: including them stretched the box to
+	# x=196 where the drawn rig ends at 91, which pushed the camera 52 units
+	# right of the art and left the character visibly off centre — on X only,
+	# because those bones stick out sideways.
 	var cam := Camera2D.new()
 	var min_p := Vector2(INF, INF)
 	var max_p := Vector2(-INF, -INF)
 	var saw_content := false
-	for bone in _collect(instance, Bone2D):
-		min_p = min_p.min(bone.global_position)
-		max_p = max_p.max(bone.global_position)
-		saw_content = true
 	for poly in _collect(instance, Polygon2D):
 		# Unequipped attachments ship as visible=false polygons that stick
 		# far outside the drawn rig — framing with them shrinks the rig and
@@ -71,13 +74,57 @@ func _ready() -> void:
 		# the runtime draws). Skip them so both panes frame identically.
 		if not poly.visible:
 			continue
-		var xform: Transform2D = poly.get_global_transform()
+		var node_xf: Transform2D = poly.get_global_transform()
 		var offset: Vector2 = poly.offset
+		# Godot stores bone/weight PAIRS in `bones`: [path, weights, path,
+		# weights, …]. There is no `weights` property on Polygon2D — reading one
+		# is a runtime error that aborts this whole function and leaves the pane
+		# black (found by running the engine headless, not by reading docs).
+		var bones: Array = poly.bones
+		if bones.size() >= 2:
+			# Godot skins with `pose * global_rest⁻¹` per bone, NOT with the node
+			# transform: `polygon` holds BIND-space vertices, and at the setup
+			# pose every bone's pose differs from its rest. Framing with the bind
+			# box put the rig off centre — on X only, because the cape and the
+			# hair hang sideways while the height barely moves. This is the same
+			# basis the converter states everywhere else (model.py: pose *
+			# global_rest^-1).
+			var skeleton: Node = poly.get_node_or_null(poly.skeleton)
+			var pairs := []
+			var index := 0
+			while index + 1 < bones.size():
+				var bone: Bone2D = (skeleton.get_node_or_null(str(bones[index]))
+					if skeleton != null else null)
+				var basis: Transform2D = (bone.get_global_transform()
+					* bone.get_skeleton_rest().affine_inverse()
+					if bone != null else Transform2D())
+				pairs.append([bone != null, basis, bones[index + 1]])
+				index += 2
+			for vertex in range(poly.polygon.size()):
+				var point: Vector2 = poly.polygon[vertex] + offset
+				var acc := Vector2.ZERO
+				for pair in pairs:
+					var weights: PackedFloat32Array = pair[2]
+					if not pair[0] or vertex >= weights.size():
+						continue        # missing bone or weight = no influence
+					acc += (pair[1] * point) * weights[vertex]
+				min_p = min_p.min(node_xf * acc)
+				max_p = max_p.max(node_xf * acc)
+			saw_content = true
+			continue
 		for point in poly.polygon:
-			# Native grammar: world = nodeTransform * (vertex + offset) — the
-			# offset shifts the drawn mesh and must be part of the framing.
-			min_p = min_p.min(xform * (point + offset))
-			max_p = max_p.max(xform * (point + offset))
+			# Unskinned grammar: world = nodeTransform * (vertex + offset) —
+			# the offset shifts the drawn mesh and must be part of the framing.
+			min_p = min_p.min(node_xf * (point + offset))
+			max_p = max_p.max(node_xf * (point + offset))
+			saw_content = true
+	if not saw_content:
+		# A rig with no attachments draws nothing, so there is no artwork to
+		# frame. Fall back to the bones rather than leaving the camera at the
+		# origin staring at empty space.
+		for bone in _collect(instance, Bone2D):
+			min_p = min_p.min(bone.global_position)
+			max_p = max_p.max(bone.global_position)
 			saw_content = true
 	if saw_content:
 		var rect := Rect2(min_p, max_p - min_p)
@@ -90,6 +137,8 @@ func _ready() -> void:
 			viewport.y / max(rect.size.y, 1.0) / 1.2)
 	add_child(cam)
 	cam.make_current()
+	if OS.has_feature("web"):
+		_publish_cam_framing()
 
 	_capture_setup_pose()
 
@@ -157,13 +206,29 @@ func _web_inspect(_args: Array) -> void:
 		lines.append("P %s@%s:%s" % [poly.name, String(poly.bones), ",".join(pts)])
 	win.previewInspectData("|".join(lines))
 
+func _publish_cam_framing() -> void:
+	# The browser resizes the canvas AFTER the engine boots, so the boot numbers
+	# are not necessarily the ones that framed the scene — and a viewport that
+	# changed under a camera fitted to the old one is exactly how a rig ends up
+	# off centre on one axis. Report at boot and again once the layout settles.
+	_report_cam([])
+	await get_tree().create_timer(2.0).timeout
+	_report_cam([])
+
 func _report_cam(_args: Array) -> void:
 	var cam := get_viewport().get_camera_2d()
 	var win := JavaScriptBridge.get_interface("window")
-	win.previewCamData("viewport=%s|zoom=%s|center=%s" % [
-		get_viewport().get_visible_rect().size,
+	var viewport: Vector2 = get_viewport().get_visible_rect().size
+	var data := "viewport=%s|zoom=%s|center=%s" % [
+		viewport,
 		cam.zoom if cam else Vector2.ONE,
-		cam.global_position if cam else Vector2.ZERO])
+		cam.global_position if cam else Vector2.ZERO]
+	win.previewCamData(data)
+	# Also to the engine console: the JS one is a property on the pane's window,
+	# unreachable from the shell (same-origin iframes still have separate JS
+	# realms) and invisible to the harness. A "the rig is off centre" report has
+	# to be checkable against the numbers the renderer itself is using.
+	print("PREVIEW_CAM=", data)
 
 func _publish_attachments(_args: Array) -> void:
 	# Attachment explorer: every skin attachment is a Polygon2D in the
