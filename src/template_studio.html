@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skeleton-converter studio</title>
+<style>
+  :root {
+    --bg: #16181f; --surface: #22252e; --border: #343946;
+    --text: #e8eaf0; --muted: #9aa3b5;
+    --godot: #478cbf; --spine: #f4801f; --freeze: #e6a23c; --error: #e06c75;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+               font: 13px/1.5 system-ui, sans-serif; }
+  body { padding-bottom: 48px; }
+  #bar { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+         padding: 14px 20px; background: var(--surface);
+         border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
+  #bar .brand { font-family: var(--mono); font-size: 12px; font-weight: 700;
+                letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #bar .brand em { font-style: normal; color: var(--text); }
+  #bar .hint { color: var(--muted); font-size: 12px; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px; display: grid; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border);
+          border-radius: 10px; padding: 18px; }
+  h2 { margin: 0 0 10px; font-family: var(--mono); font-size: 11px;
+       letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+       font-weight: 700; }
+  #drop { border: 1px dashed var(--border); border-radius: 10px; padding: 28px 18px;
+          text-align: center; cursor: pointer; transition: border-color .12s, background .12s; }
+  #drop:hover, #drop:focus-visible, #drop.over { border-color: var(--spine);
+          background: rgba(244,128,31,.06); outline: none; }
+  #drop .big { margin: 0 0 4px; font-size: 15px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 0; }
+  ul { list-style: none; margin: 10px 0 0; padding: 0; }
+  #picked li, #jobs li { display: flex; align-items: baseline; gap: 10px;
+          font-family: var(--mono); font-size: 12px; padding: 5px 0;
+          border-bottom: 1px solid var(--border); }
+  #picked li:last-child, #jobs li:last-child { border-bottom: none; }
+  #picked .size, #jobs .when { color: var(--muted); margin-left: auto; }
+  #jobs .remove { flex: none; padding: 2px 9px; border-radius: 999px;
+          font: 11px var(--mono); line-height: 1.5; cursor: pointer;
+          background: transparent; color: var(--muted);
+          border: 1px solid var(--border); }
+  #jobs .remove:hover { color: var(--error); border-color: var(--error); }
+  #jobs .remove:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  #jobs .remove[disabled] { opacity: .45; cursor: progress; }
+  #jobs a { color: var(--text); text-decoration: none; }
+  #jobs a:hover { color: var(--spine); }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
+  label { display: flex; align-items: center; gap: 6px; font-family: var(--mono);
+          font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  select, input { font: 12px var(--mono); color: var(--text); background: var(--bg);
+                  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  input#name { width: 140px; } input#fps { width: 70px; }
+  select:focus-visible, input:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  button { font: 12px var(--mono); letter-spacing: .04em; padding: 7px 16px;
+           border-radius: 999px; border: 1px solid var(--text); background: var(--text);
+           color: var(--bg); font-weight: 700; cursor: pointer;
+           transition: opacity .12s, background .12s, color .12s; }
+  button:hover { opacity: .88; }
+  button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 2px; }
+  button[disabled] { background: transparent; color: var(--muted);
+                     border-color: var(--border); cursor: progress; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px; overflow-x: auto; font: 11px/1.5 var(--mono);
+        color: var(--muted); white-space: pre-wrap; }
+  #error { color: var(--error); font-family: var(--mono); font-size: 12px; }
+  code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+</style>
+</head>
+<body>
+<header id="bar">
+  <span class="brand">skeleton<em>·studio</em></span>
+  <span class="hint">upload a rig &rarr; it is detected, converted into every other format &rarr; the source and every output, side by side</span>
+</header>
+<main>
+  <section class="card">
+    <h2>Rig</h2>
+    <div id="drop" role="button" tabindex="0" aria-label="Choose the rig files">
+      <p class="big">Drop the rig's folder here (or its files), or click to choose</p>
+      <p class="hint">a Godot <code>.tscn</code>, a Spine <code>.json</code> with its
+        <code>.atlas</code> and page image, or a SkelForm <code>.skf</code> — a
+        picker hands over the files you mark and no others, so the folder is the
+        one-click way to bring a rig and everything it references</p>
+    </div>
+    <input id="files" type="file" multiple hidden>
+    <input id="folder" type="file" webkitdirectory multiple hidden>
+    <ul id="picked"></ul>
+    <div class="row">
+      <label>fps <input id="fps" type="number" min="1" max="1000" placeholder="auto"></label>
+      <label>name <input id="name" placeholder="from the file"></label>
+      <button id="pickfolder" type="button">choose a folder</button>
+      <button id="go" disabled>Convert &amp; compare</button>
+    </div>
+    <p class="hint" id="targethint" style="margin-top:10px"></p>
+    <p id="error" hidden></p>
+    <pre id="log" hidden></pre>
+    <p class="hint" id="continue" hidden><a id="continueLink" href="#">open the comparison →</a></p>
+  </section>
+
+  <section class="card">
+    <h2>Recent conversions</h2>
+    <ul id="jobs"></ul>
+    <p class="hint" id="nojobs">nothing yet — the jobs live under the server root.</p>
+  </section>
+
+  <section class="card">
+    <h2>How each pane is rendered</h2>
+    <p class="hint">The <strong>first</strong> pane plays the source as it arrived: a Spine
+      rig with its own atlas, a SkelForm archive, or a Godot scene packed for the browser
+      engine. Every pane after it plays <strong>what a conversion wrote</strong> — the Spine
+      runtime, the real engine, or SkelForm's own web player on the written
+      <code>.skf</code> — so one upload shows the rig in every tool at once. A format the
+      rig is already in is not converted into itself, and when a pane cannot be built (a
+      Godot target with no engine binary to export with) that side replays through the
+      Spine leg and its folder says <code>via-spine</code>.</p>
+  </section>
+</main>
+<script>
+const TARGETS = __TARGETS__;
+const JOBS = __JOBS__;
+const MAX_UPLOAD = __MAX_UPLOAD__;
+
+const drop = document.getElementById("drop");
+const input = document.getElementById("files");
+const folderInput = document.getElementById("folder");
+const pickFolder = document.getElementById("pickfolder");
+const picked = document.getElementById("picked");
+const fpsInput = document.getElementById("fps");
+const nameInput = document.getElementById("name");
+const goBtn = document.getElementById("go");
+const logBox = document.getElementById("log");
+const continueBox = document.getElementById("continue");
+const continueLink = document.getElementById("continueLink");
+const errorBox = document.getElementById("error");
+const hint = document.getElementById("targethint");
+
+let files = [];
+
+function human(size) {
+  if (size < 1024) return size + " B";
+  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + " KB";
+  return (size / 1048576).toFixed(1) + " MB";
+}
+
+function render() {
+  picked.innerHTML = "";
+  for (const file of files) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.textContent = file.name;
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = human(file.size);
+    li.append(name, size);
+    picked.append(li);
+  }
+  goBtn.disabled = files.length === 0;
+  // One upload produces every output: the source pane plus one pane per
+  // format it is not already in. `fps` only reaches a frame-based target
+  // (SkelForm keys land on integer frames), so say which those are.
+  // One upload produces every output, so the hint states what each conversion
+  // writes instead of what a selection would do.
+  hint.textContent = "";
+  for (const target of TARGETS) {
+    const line = document.createElement("div");
+    line.textContent = target.name + ": " + target.hint;
+    hint.append(line);
+  }
+  const framed = TARGETS.filter((t) => t.frames);
+  if (framed.length) {
+    const line = document.createElement("div");
+    line.textContent = "fps applies to " + framed.map((t) => t.name).join(", ")
+      + " only — it keys animations on integer frames.";
+    hint.append(line);
+  }
+}
+
+function take(list) {
+  // A chosen folder carries editor droppings (.DS_Store, .import caches); the
+  // rig and its companions are what the conversion reads.
+  files = [...list].filter((file) => !file.name.startsWith("."));
+  const stem = files.length ? files[0].name.replace(/\.[^.]+$/, "") : "";
+  if (!nameInput.value) nameInput.placeholder = stem || "from the file";
+  errorBox.hidden = true;
+  render();
+}
+
+drop.onclick = () => input.click();
+drop.onkeydown = (event) => {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.click(); }
+};
+input.onchange = () => take(input.files);
+pickFolder.onclick = () => folderInput.click();
+folderInput.onchange = () => take(folderInput.files);
+for (const type of ["dragenter", "dragover"]) {
+  drop.addEventListener(type, (event) => {
+    event.preventDefault(); drop.classList.add("over");
+  });
+}
+for (const type of ["dragleave", "drop"]) {
+  drop.addEventListener(type, (event) => {
+    event.preventDefault(); drop.classList.remove("over");
+  });
+}
+
+// A dropped folder reaches us as one directory entry, and dataTransfer.files
+// stays empty for it — so walk the entries when they are there and fall back
+// to the flat file list otherwise (a drop of loose files).
+async function droppedFiles(dataTransfer) {
+  const entries = [...(dataTransfer.items || [])]
+    .map((item) => item.webkitGetAsEntry && item.webkitGetAsEntry())
+    .filter(Boolean);
+  if (!entries.length) return [...(dataTransfer.files || [])];
+  const out = [];
+  for (const entry of entries) await walkEntry(entry, out);
+  return out;
+}
+
+async function walkEntry(entry, out) {
+  if (entry.isFile) {
+    const file = await new Promise((ok, fail) => entry.file(ok, fail));
+    if (!file.name.startsWith(".")) out.push(file);  // .DS_Store and friends
+    return;
+  }
+  if (!entry.isDirectory) return;
+  const reader = entry.createReader();
+  for (;;) {
+    // readEntries returns at most 100 entries per call, so keep asking.
+    const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+    if (!batch.length) return;
+    for (const child of batch) await walkEntry(child, out);
+  }
+}
+
+drop.addEventListener("drop", async (event) => {
+  const list = await droppedFiles(event.dataTransfer || {});
+  if (list.length) take(list);
+});
+
+// btoa() needs a binary string; a rig with its atlas is a few MB, so the
+// bytes are walked in chunks instead of spread into one call.
+async function base64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 8192)
+    text += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return btoa(text);
+}
+
+function showError(message) {
+  errorBox.hidden = false;
+  errorBox.textContent = message;
+}
+
+goBtn.onclick = async () => {
+  const payload = {
+    files: [],
+    name: nameInput.value.trim() || null,
+    fps: fpsInput.value ? Number(fpsInput.value) : null,
+  };
+  goBtn.disabled = true;
+  goBtn.textContent = "Converting…";
+  errorBox.hidden = true;
+  continueBox.hidden = true;
+  try {
+    for (const file of files) {
+      if (file.size > MAX_UPLOAD) throw new Error(file.name + " is larger than the upload limit");
+      payload.files.push({ name: file.name, data: await base64(file) });
+    }
+    const response = await fetch("/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({ error: "the server sent no JSON" }));
+    logBox.hidden = false;
+    logBox.textContent = (data.log || []).join("\n") || "(no log)";
+    if (!response.ok || data.error) {
+      showError(data.error || ("HTTP " + response.status));
+      goBtn.disabled = false;
+      goBtn.textContent = "Convert & compare";
+      return;
+    }
+    // A note says the comparison is missing something the user has to fix
+    // (an atlas that never came along, a scene with no browser shell…), so
+    // navigating away instantly would flash it and lose it. Stop here and
+    // let them read and continue when they are done.
+    const notes = (data.log || []).filter(line => line.startsWith("note:"));
+    if (notes.length) {
+      continueBox.hidden = false;
+      continueLink.href = data.url;
+      goBtn.disabled = false;
+      goBtn.textContent = "Convert & compare";
+      return;
+    }
+    location.href = data.url;
+  } catch (error) {
+    showError(String(error.message || error));
+    goBtn.disabled = false;
+    goBtn.textContent = "Convert & compare";
+  }
+};
+
+render();
+
+const jobList = document.getElementById("jobs");
+const noJobs = document.getElementById("nojobs");
+
+function showJobs() {
+  jobList.textContent = "";
+  noJobs.hidden = JOBS.length > 0;
+  for (const job of JOBS) jobList.append(jobRow(job));
+}
+
+function jobRow(job) {
+  const li = document.createElement("li");
+  const link = document.createElement("a");
+  link.href = job.url;
+  link.textContent = job.job;
+  const when = document.createElement("span");
+  when.className = "when";
+  when.textContent = job.when;
+  const remove = document.createElement("button");
+  remove.className = "remove";
+  remove.type = "button";
+  remove.textContent = "remove";
+  remove.title = "Delete this conversion (its upload, every pane and the compare page)";
+  remove.setAttribute("aria-label", "Delete the conversion " + job.job);
+  remove.onclick = async () => {
+    // Deleting throws away the comparison (it is one command away from being
+    // regenerated), so it asks first and reports where the failure happened.
+    if (!confirm("Delete the conversion " + job.job + "?")) return;
+    remove.disabled = true;
+    remove.textContent = "…";
+    try {
+      const response = await fetch("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job: job.job }),
+      });
+      const data = await response.json().catch(() => ({ error: "the server sent no JSON" }));
+      if (!response.ok || data.error) throw new Error(data.error || ("HTTP " + response.status));
+      const index = JOBS.indexOf(job);
+      if (index >= 0) JOBS.splice(index, 1);
+      li.remove();
+      noJobs.hidden = JOBS.length > 0;
+    } catch (error) {
+      remove.disabled = false;
+      remove.textContent = "remove";
+      showError("could not delete " + job.job + ": " + (error.message || error));
+    }
+  };
+  li.append(link, when, remove);
+  return li;
+}
+
+showJobs();
+</script>
+</body>
+</html>

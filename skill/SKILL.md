@@ -25,6 +25,13 @@ python3 -m src.cli convert --to spine path/to/player.tscn -o out --name animatio
 # Spine JSON -> Godot scene (out/animation.tscn + the page image)
 python3 -m src.cli convert --to godot path/to/hero.json -o out --name animation
 
+# Anything -> SkelForm bundle (out/animation.skf: armature + embedded pages)
+python3 -m src.cli convert --to skelform path/to/hero.json -o out --name animation
+
+# Upload, convert, compare in the browser (detects the source format)
+python3 -m src.studio            # http://localhost:8090 (make studio / studio-stop)
+# jobs land in tmp/studio/; the page's `remove` button deletes one
+
 # Numeric diff between two files of the same format
 python3 -m src.cli compare --format godot rig_a.tscn rig_b.tscn
 python3 -m src.cli compare --format spine a.json b.json
@@ -32,13 +39,29 @@ python3 -m src.cli compare --format spine a.json b.json
 
 Requires `python3` (3.10+; the converter itself has zero third-party
 dependencies). Optional extras: the Godot 4 binary (`GODOT_BIN` env var)
-enables the Spine→Godot web preview and `make godot-preview`; `node` plus one
+enables the Spine→Godot web preview (the studio's Godot pane and the
+`preview/` folder a `--to godot` conversion writes); `node` plus one
 `npm install` inside `validation/` enables the dev-only Spine-runtime
 validation harness. None of these are needed for the conversions themselves.
 
-`make` wraps the flows (paths come from `local.mk`, gitignored — see the
-Makefile header): `make godot-to-spine`, `make spine-to-godot`,
-`make godot-preview`, `make spine-preview`, `make compare`, `make test`.
+`make studio` starts the same server. In the studio the FIRST pane plays the
+file you uploaded and every pane after it plays one converted output — Spine,
+Godot (the real engine, WASM) or SkelForm (its own web player on the written
+`.skf`), one pane per format, source first. A rig is never converted into the
+format it arrived in, and only a side that cannot be built falls back to the
+Spine leg, labelled `via-spine`.
+
+Send a Spine rig's `.atlas` and page image with its `.json`: the studio says so
+in the job's notes (which stay on the page, with a link to the comparison) and
+marks that pane `not loaded` — a pane typed by its *content*, never by folder
+name, so it is still driven as Spine and the other pane keeps playing. Choose
+the rig's **folder** (or drop it) to bring its companions along: a browser only
+sees the files it was handed, unlike the CLI, which scans the JSON's folder.
+
+`make` holds only `studio`, `studio-stop` and `test`. Conversions are
+`python3 -m src.cli convert` (the install commands above; it runs on disk, so
+it can scan the input's folder) or the studio (the browser path, one pane per
+format).
 
 ## Workflow
 
@@ -49,7 +72,11 @@ Makefile header): `make godot-to-spine`, `make spine-to-godot`,
    texture is copied and named after `--name` (never after the source PNG). The
    atlas declares the image name, so renaming or splitting them breaks loading.
    `--to godot` writes `<name>.tscn` plus the page image (`--texture` keeps a
-   specific `res://` path instead).
+   specific `res://` path instead). `--to skelform` writes one `<name>.skf`
+   archive carrying the armature and the pages, plus a viewer that plays it
+   with SkelForm's own web player; it stores key times as integer
+   frames, so the chosen fps (60 unless a finer grid avoids a key collision,
+   `--fps` to force one) is reported with what it cost.
 3. **Validate numerically** — never by eye:
 
    ```bash
@@ -93,29 +120,23 @@ Makefile header): `make godot-to-spine`, `make spine-to-godot`,
    drives the `SpineCanvas` app API that 4.3 removed, and a 4.3 runtime loads
    the rig without error then renders nothing. Do not bump it.
 
-   All make preview targets serve through `python3 -m src.devserver <port>
-   <dir>` — a static server that sends `Cache-Control: no-store` headers.
+   Anything that serves a preview goes through `NoCacheHandler`
+   (`src/devserver.py`) — a static server that sends `Cache-Control: no-store`
+   headers; the studio builds its own handler on top of it.
    Plain `http.server` serves stale bundles after an in-place rebuild (Chrome
    heuristically caches on Last-Modified), which looks like your new rig is
    not loading.
 
 ## Side-by-side compare (browser)
 
-`make compare` (bundle dirs in `local.mk` as `COMPARE_GODOT` / `COMPARE_SPINE`,
-or inline: `make compare COMPARE_GODOT=... COMPARE_SPINE=...`) builds one
-`compare.html` in the **parent** folder of the two preview bundles and serves
-that parent with the no-cache devserver:
+The studio is the compare: upload a rig and it writes one `compare.html` in the
+job folder holding every pane (source first, one per converted format) and
+serves it. Equivalent by hand, for bundles that are already on disk — they must
+sit under one parent (one origin so the shell can reach into every iframe):
 
 ```bash
-make compare   # then open http://localhost:8083/compare.html
-```
-
-Equivalent by hand — both bundles must sit under one parent (one origin so the
-shell can reach into both iframes):
-
-```bash
-python3 -c "from src.bundle import compare_page; \
-compare_page('<godot-bundle-dir>', '<spine-bundle-dir>')"
+python3 -c "from src.compare_out import emit_compare; \
+emit_compare('<bundle-dir-a>', '<bundle-dir-b>')"
 python3 -m src.devserver 8083 <parent-dir>
 ```
 

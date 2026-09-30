@@ -3,7 +3,8 @@
 The stdlib http.server sends no cache headers; Chrome's heuristic caching
 (Last-Modified-based) then serves a STALE bundle after it is rebuilt in
 place — a previous rig keeps rendering even though every file on disk is
-new. Every preview/compare make target runs through this instead:
+new. The studio builds its own handler on top of `NoCacheHandler`, and a
+bundle already on disk can be served with:
 
     python3 -m src.devserver PORT DIRECTORY
 """
@@ -23,7 +24,6 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    import sys
     port, directory = int(sys.argv[1]), sys.argv[2]
     handler = functools.partial(NoCacheHandler, directory=directory)
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), handler)

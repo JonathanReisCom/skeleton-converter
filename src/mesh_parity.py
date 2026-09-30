@@ -25,7 +25,8 @@ import math
 from pathlib import Path
 
 from . import constraints
-from .in_spine import read_atlas_regions, read_png_size, read_spine
+from .in_spine import read_atlas_regions, read_spine
+from .png import read_png_size
 
 
 def _runtime_world(spine: dict, bone_name: str, att: dict,
@@ -143,10 +144,30 @@ def mesh_parity(spine_path: str, atlas_path: str | None = None,
                 continue
             # A slot without a setup attachment draws nothing at setup: the
             # converted first entry is correctly flagged unequipped.
-            if is_equipped and not model_att.equipped:
+            # A slot on a bone the runtime deactivates under this skin draws
+            # nothing either, setup attachment or not (`getBounds` and the draw
+            # loop both skip inactive bones), so the writer's flag is right and
+            # the expectation is what is wrong here.
+            if is_equipped and solver.active.get(bone_name, True) \
+                    and not model_att.equipped:
                 violations.append(
                     f"{slot_name}/{att_name}: equipped attachment flagged "
                     "unequipped (it will not draw)")
+            # The SETUP flag is a different question — what the rig draws with
+            # no timeline applied — and every leg hangs a different thing off
+            # it: Godot's initial `visible`, the exported Spine slot's
+            # attachment, and the SkelForm file's `hidden`/`init_hidden`. A
+            # wrong one shows art the source leaves out, and stretches the
+            # viewer's framing box with it, so the two panes of the comparison
+            # never line up.
+            draws_at_setup = bool(setups.get(slot_name)) \
+                and (att_name == setups.get(slot_name)
+                     or att.get("name", att_name) == setups.get(slot_name)) \
+                and solver.active.get(bone_name, True)
+            if draws_at_setup != model_att.setup:
+                violations.append(
+                    f"{slot_name}/{att_name}: setup pose draws it = "
+                    f"{draws_at_setup}, model says {model_att.setup}")
             # Geometry: the model stores godot-space locals against the node
             # position; reconstruct spine-space world for every vertex. A
             # bone the runtime deactivates under the skin keeps (0, 0) — the

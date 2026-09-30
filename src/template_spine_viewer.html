@@ -85,11 +85,15 @@
 const SKELETON_URL = new URLSearchParams(location.search).get("skeleton")
   || "__DEFAULT_SKELETON__";
 // The atlas name does not always mirror the JSON's (hero-pro.json ships with
-// hero.atlas), so use the one resolved at generation time, then fall back to
-// the same-stem guess for ?skeleton= overrides.
-const ATLAS_URL = new URLSearchParams(location.search).get("atlas")
-  || "__DEFAULT_ATLAS__"
-  || SKELETON_URL.replace(/\.json$/, ".atlas");
+// hero.atlas), so use the one resolved at generation time; the same-stem guess
+// is only for an explicit ?skeleton= override, where the caller named a file
+// this shell was not generated for. An empty default means the pane was built
+// with no atlas at all, and guessing one prints a 404 HTML dump that buries
+// the real reason.
+const ATLAS_PARAM = new URLSearchParams(location.search).get("atlas");
+const ATLAS_URL = ATLAS_PARAM || "__DEFAULT_ATLAS__"
+  || (new URLSearchParams(location.search).get("skeleton")
+      ? SKELETON_URL.replace(/\.json$/, ".atlas") : "");
 const FIRST_ANIMATION = "__FIRST_ANIMATION__";
 
 const canvas = document.getElementById("canvas");
@@ -178,6 +182,18 @@ new spine.SpineCanvas(canvas, {
       if (!SKELETON_URL || !SKELETON_URL.endsWith(".json")) {
         errorBox.textContent =
           "No skeleton found. Open with ?skeleton=<name>.json";
+        window.__loadError = "no skeleton url";
+        return;
+      }
+      if (!ATLAS_URL) {
+        // No atlas was shipped with this rig, so there is nothing to texture
+        // the attachments with. Say that instead of asking for a file that
+        // was never there, and let a compare shell see the pane is done.
+        errorBox.textContent =
+          "No atlas for this rig — it was built without one, so the poses "
+          + "animate but nothing is textured. Rebuild with the .atlas and "
+          + "its page image.";
+        window.__loadError = "no atlas";
         return;
       }
       app.assetManager.loadTextureAtlas(ATLAS_URL);
@@ -186,6 +202,14 @@ new spine.SpineCanvas(canvas, {
     initialize: (app) => {
       const assetManager = app.assetManager;
       const atlas = assetManager.get(ATLAS_URL);
+      if (!atlas) {
+        // loadAssets already explained a rig that shipped without an atlas;
+        // overwriting that here would bury the real reason behind a vaguer one.
+        window.__loadError = ATLAS_URL
+          ? "atlas failed to load: " + ATLAS_URL : "no atlas was shipped";
+        if (!errorBox.textContent) errorBox.textContent = window.__loadError;
+        return;
+      }
       const json = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
       skeleton = new spine.Skeleton(json.readSkeletonData(assetManager.get(SKELETON_URL)));
       nameBox.textContent = SKELETON_URL;
@@ -201,17 +225,57 @@ new spine.SpineCanvas(canvas, {
       window.__renderer = app.renderer;
 
       const camera = app.renderer.camera;
-      // Frame the skeleton from its real setup-pose bounds. The ortho camera
-      // multiplies the viewport by zoom; the max ratio fits both axes with margin.
-      const offset = new spine.Vector2(), size = new spine.Vector2();
-      skeleton.getBounds(offset, size);
-      camera.position.set(offset.x + size.x / 2, offset.y + size.y / 2, 0);
-      camera.zoom = Math.max(size.x / canvas.clientWidth, size.y / canvas.clientHeight) * 1.2;
+      // Frame the rig from its real setup-pose bounds, from the LIVE canvas
+      // size: the app sizes the drawing buffer after `init` runs (and the pane
+      // can resize later), so a camera computed once here keeps whatever the
+      // canvas measured at that moment — a default 300x150 buffer framed the
+      // whole rig into a corner.
+      //
+      // `zoom` scales the viewport DOWN, so the screen scale is 1/zoom in
+      // BACKING pixels: divide by the device pixel ratio to compare it with the
+      // CSS-space fit the SkelForm pane does. Same 0.85 margin on both sides —
+      // the panes are the comparison's arbiter, and a different box or margin
+      // frames them at different sizes even when the geometry matches to the
+      // unit.
+      window.__fit = () => {
+        const offset = new spine.Vector2(), size = new spine.Vector2();
+        // Measure the SETUP pose, exactly like the SkelForm pane does. A box
+        // measured on whatever frame is on screen changes with the animation —
+        // and with the clock, since a refit can land mid-playback — so two
+        // panes that frame the same rig would still disagree by a few percent.
+        skeleton.setToSetupPose();
+        skeleton.updateWorldTransform(spine.Physics.update);
+        skeleton.getBounds(offset, size);
+        const cssWidth = Math.max(canvas.clientWidth, 1);
+        const cssHeight = Math.max(canvas.clientHeight, 1);
+        const dpr = canvas.width / cssWidth || 1;
+        camera.position.set(offset.x + size.x / 2, offset.y + size.y / 2, 0);
+        camera.zoom = Math.max(size.x / cssWidth, size.y / cssHeight)
+          / (dpr * 0.85);
+      };
+      // The pane is laid out AFTER this runs, and the iframe's own resize event
+      // can fire before the listener exists — so refit whenever the canvas
+      // measures differently than the fit that is in place. Checking three
+      // numbers per frame is cheaper than chasing the layout.
+      let fittedSize = "";
+      window.__fitIfResized = () => {
+        const key = [canvas.clientWidth, canvas.clientHeight, canvas.width].join("x");
+        if (key === fittedSize) return;
+        fittedSize = key;
+        window.__fit();
+      };
+      window.__fitIfResized();
+      window.addEventListener("resize", () => window.__fitIfResized());
 
       showTracks(state.data);
       showAttachments(skeleton);
       // Premultiplied-alpha atlases (pma:true) need the flag on the renderer
       // or regions sample washed; non-PMA atlases (the default) are unchanged.
+      // It is read from the atlas, NOT assumed: every exporter leaves fully
+      // transparent pixels at a sprite's border carrying RGB, which is legal in
+      // a non-premultiplied page and INVISIBLE under `SRC_ALPHA` blending — but
+      // a premultiplied blend adds that RGB straight in and outlines every
+      // attachment in white.
       app.renderer.premultipliedAlpha =
         (atlas.pages || []).some(p => p.pma);
     },
@@ -231,17 +295,26 @@ new spine.SpineCanvas(canvas, {
     },
     render: (app) => {
       if (!skeleton) return;
+      if (window.__fitIfResized) window.__fitIfResized();
       app.renderer.resize(spine.ResizeMode.Expand);
       const gl = app.renderer.context.gl;
-      gl.clearColor(0.118, 0.129, 0.161, 1);
+      // The same #16181f the SkelForm pane shows (its canvas clears to
+      // transparent and the CSS `--bg` shows through): a different clear colour
+      // makes every background pixel differ, which drowns any real difference
+      // in a pixel comparison of two panes.
+      gl.clearColor(22 / 255, 24 / 255, 31 / 255, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       app.renderer.begin();
-      app.renderer.drawSkeleton(skeleton, true);
+      // `drawSkeleton`'s second argument IS premultipliedAlpha: passing a
+      // hard `true` here overrode the atlas-derived flag above and is what drew
+      // the white attachment outlines this pane used to show.
+      app.renderer.drawSkeleton(skeleton, app.renderer.premultipliedAlpha);
       app.renderer.end();
     },
     error: (app, errors) => {
-      errorBox.textContent = Object.entries(errors)
+      window.__loadError = Object.entries(errors)
         .map(([path, msg]) => path + ": " + msg).join("\\n");
+      errorBox.textContent = window.__loadError;
     }
   }
 });

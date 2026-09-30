@@ -3,41 +3,26 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
+from .png import read_png_size
 from .model import (
-    Attachment, Skeleton,
-    compose, godot_transform2d, godot_rest_worlds, invert, mirror_point, mirror_world, multiply, transform,
-    godot_world_transforms,
+    Skeleton, compose, godot_rest_worlds, godot_world_transforms,
+    invert, mirror_point, mirror_world, transform,
 )
 
 
 def triangulate(polygons: list, vertex_count: int) -> list:
+    """Convex index groups -> a flat triangle list (an empty rig fans the
+    polygon's own vertex order, which is what a region attachment needs)."""
     triangles = []
-    groups = [polygons] if polygons and isinstance(polygons[0], int) else (polygons or [])
-    for group in groups:
+    for group in polygons or []:
         for index in range(1, len(group) - 1):
             triangles.extend([group[0], group[index], group[index + 1]])
     if not triangles:
         for index in range(1, vertex_count - 1):
             triangles.extend([0, index, index + 1])
     return triangles
-
-
-def read_png_size(path: str) -> tuple | None:
-    try:
-        with open(path, "rb") as handle:
-            header = handle.read(24)
-    except OSError:
-        return None
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        return None
-    return (
-        int.from_bytes(header[16:20], "big"),
-        int.from_bytes(header[20:24], "big"),
-    )
-
 
 
 def resolve_texture_path(texture_path: str, scene_path: str) -> str | None:
@@ -82,124 +67,6 @@ def render_atlas(model: Skeleton, image_name: str, image_path: str | None = None
             int(round(span_x)), int(round(span_y)),
         ))
     return "\n".join(lines) + "\n"
-
-
-# ---------------------------------------------------------------------------
-# Godot .tscn writer
-# ---------------------------------------------------------------------------
-
-
-def render_tscn(model: Skeleton, bone_nodes: list, polygon_nodes: list,
-                animations: list, animation_refs: list, texture_path: str) -> str:
-    lines = ['[gd_scene format=3]', ""]
-    lines.append(f'[ext_resource type="Texture2D" path="{texture_path}" id="1"]')
-    lines.append("")
-    for entry in animations:
-        lines.extend(entry["lines"])
-        lines.append("")
-    lines.append('[sub_resource type="AnimationLibrary" id="AnimationLibrary_1"]')
-    lines.append("_data = {")
-    for anim_name, resource_id in animation_refs:
-        lines.append(f'&"{anim_name}": SubResource("{resource_id}"),')
-    lines.append("}")
-    lines.append("")
-    lines.append('[node name="SkeletonRoot" type="Node2D"]')
-    lines.append('[node name="Sprite2D" type="Node2D" parent="."]')
-    lines.append('[node name="Skeleton2D" type="Skeleton2D" parent="Sprite2D"]')
-    for node in bone_nodes:
-        lines.append(f'[node name="{node["name"]}" type="Bone2D" parent="{node["parent"]}"]')
-        lines.extend(node["props"])
-        lines.append("")
-    lines.append('[node name="Polygons" type="Node2D" parent="Sprite2D"]')
-    lines.append("")
-    for node in polygon_nodes:
-        lines.append(f'[node name="{node["name"]}" type="Polygon2D" parent="{node["parent"]}"]')
-        lines.extend(node["props"])
-        lines.append("")
-    lines.append('[node name="AnimationPlayer" type="AnimationPlayer" parent="."]')
-    lines.append('libraries/ = SubResource("AnimationLibrary_1")')
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _emit_animation_resource(resource_id: str, tracks: list, length: float) -> list:
-    lines = [f'[sub_resource type="Animation" id="{resource_id}"]']
-    lines.append(f"length = {round(length, 6)}")
-    lines.append("loop_mode = 1")
-    for track_index, (property_name, keys, track_path, curves) in enumerate(tracks):
-        keys, curves = _bake_track(keys, curves)
-        times = ", ".join(str(time) for time, _ in keys)
-        transitions = ", ".join(str(c) for c in curves) if curves else ", ".join("1" for _ in keys)
-        if property_name == "rotation_degrees":
-            values = ", ".join(str(round(v, 6)) for _, v in keys)
-        else:
-            values = ", ".join(
-                f"Vector2({round(v[0], 6)}, {round(v[1], 6)})" for _, v in keys
-            )
-        lines.append(f'tracks/{track_index}/type = "value"')
-        lines.append(f"tracks/{track_index}/imported = false")
-        lines.append(f"tracks/{track_index}/enabled = true")
-        lines.append(f'tracks/{track_index}/path = NodePath("{track_path}")')
-        lines.append(f"tracks/{track_index}/interp = 1")
-        lines.append(f"tracks/{track_index}/loop_wrap = true")
-        lines.append(
-            'tracks/%d/keys = {\n"times": PackedFloat32Array(%s),\n'
-            '"transitions": PackedFloat32Array(%s),\n"update": 0,\n'
-            '"values": [%s]\n}' % (track_index, times, transitions, values)
-        )
-    return lines
-
-
-def _bake_track(keys: list, curves: list) -> tuple:
-    """Expand bezier-interpolated intervals into dense linear keys."""
-    has_bezier = any(isinstance(c, (list, tuple)) and len(c) >= 4 for c in curves or [])
-    if not has_bezier:
-        return keys, [1.0] * len(keys)
-    baked_keys = []
-    baked_transitions = []
-    for index, (time, value) in enumerate(keys):
-        baked_keys.append((time, value))
-        baked_transitions.append(1.0)
-        curve = curves[index] if index < len(curves) else None
-        if not isinstance(curve, (list, tuple)) or len(curve) < 4 or index + 1 >= len(keys):
-            continue
-        next_time, next_value = keys[index + 1]
-        samples = 10
-        for step in range(1, samples):
-            fraction = step / samples
-            if isinstance(value, tuple):
-                sample_time, _ = bezier_table_point(
-                    curve, 0, step, time, next_time, value[0], next_value[0]
-                )
-                sample_value = tuple(
-                    bezier_table_point(
-                        curve, axis, step, time, next_time, value[axis], next_value[axis]
-                    )[1]
-                    for axis in range(len(value))
-                )
-            else:
-                sample_time, sample_value = bezier_table_point(
-                    curve, 0, step, time, next_time, value, next_value
-                )
-            baked_keys.append((round(sample_time, 6), sample_value))
-            baked_transitions.append(1.0)
-    return baked_keys, baked_transitions
-
-
-
-def map_curve_to_godot(curve, axis: int, offset: float, negate: bool):
-    """Map one bezier segment's control values into Godot's value space."""
-    if not isinstance(curve, (list, tuple)):
-        return curve
-    offset_index = axis * 4
-    if len(curve) < offset_index + 4:
-        return curve
-    mapped = list(curve)
-    for index in (offset_index + 1, offset_index + 3):
-        control = float(mapped[index])
-        mapped[index] = -control + offset if negate else control + offset
-    return mapped
-
 
 
 # ---------------------------------------------------------------------------
@@ -355,9 +222,9 @@ def write_spine_json(model: Skeleton, output_path: str,
             spine["slots"].append({
                 "name": slot_name,
                 "bone": host,
-                "attachment": att.name if att.equipped else "",
+                "attachment": att.name if att.setup else "",
             })
-        elif att.equipped:
+        elif att.setup:
             next(s for s in spine["slots"]
                  if s["name"] == slot_name)["attachment"] = att.name
         spine["skins"][0]["attachments"].setdefault(slot_name, {})[att.name] = entry
@@ -375,7 +242,7 @@ def write_spine_json(model: Skeleton, output_path: str,
 
             bone_tracks = {}
 
-            def _clamp_first_last(keys: list, value_key: str) -> list:
+            def _clamp_first_last(keys: list) -> list:
                 """Reproduce Godot's AnimationPlayer edge behaviour: before the
                 first key the engine extrapolates the FIRST REAL SEGMENT
                 (key1 -> key2) backwards: value(t) = key1 + slope*(t1 - t),
@@ -405,40 +272,99 @@ def write_spine_json(model: Skeleton, output_path: str,
                     out.insert(0, first)
                 return out
 
+            def curve_field(key, following, start_values, value_maps) -> dict:
+                """The segment's ``curve`` for the Spine runtime.
+
+                The rig stores control points in the key's own value space, so
+                they are mapped here through the same affine transform the key
+                values use. A two-axis track must carry one quadruple per axis
+                (8 numbers): Spine indexes the curve by axis, so a lone
+                quadruple makes the runtime read past the array and fill the
+                bone with NaN — a short curve is therefore written as no curve
+                (a straight segment) rather than a malformed one.
+
+                A **zeroed** handle pair (both value controls collapsed onto
+                the segment's start value) is a degenerate cubic whose ten
+                table samples all land on the segment's start, which this
+                runtime reads as NaN (the bone disappears). Such a segment is
+                written as no curve — a straight line, the shape it has in
+                practice.
+                """
+                if following is None:
+                    return {}
+                if key.curve == "stepped":
+                    return {"curve": "stepped"}
+                curve = key.curve
+                if not isinstance(curve, (list, tuple)) or len(curve) != len(value_maps) * 4:
+                    return {}
+                for index, start_value in enumerate(start_values):
+                    value1 = curve[index * 4 + 1]
+                    value2 = curve[index * 4 + 3]
+                    tolerance = 1e-9 + abs(start_value) * 1e-9
+                    if abs(value1 - start_value) > tolerance or \
+                            abs(value2 - start_value) > tolerance:
+                        break
+                else:
+                    return {}
+                mapped = list(curve)
+                for index, value_map in enumerate(value_maps):
+                    base = index * 4
+                    mapped[base + 1] = value_map(mapped[base + 1])
+                    mapped[base + 3] = value_map(mapped[base + 3])
+                return {"curve": [round(c, 6) for c in mapped]}
+
             if props.get("rotate"):
                 setup_rotation = bone.rotation_deg if bone else 0.0
-                bone_tracks["rotate"] = _clamp_first_last([
-                    {"time": round(k.time, 6),
-                     "value": round(-(k.angle - setup_rotation), 6),
-                     **({"curve": [round(c, 6) for c in k.curve]}
-                        if k.curve else {})}
-                    for k in props["rotate"]
-                ], "value")
+                rotate_keys = props["rotate"]
+                entries = []
+                for index, k in enumerate(rotate_keys):
+                    entry = {
+                        "time": round(k.time, 6),
+                        "value": round(-(k.angle - setup_rotation), 6),
+                    }
+                    entry.update(curve_field(
+                        k, rotate_keys[index + 1]
+                        if index + 1 < len(rotate_keys) else None,
+                        (entry["value"],),
+                        (lambda v: setup_rotation - v,)))
+                    entries.append(entry)
+                bone_tracks["rotate"] = _clamp_first_last(entries)
             if props.get("translate"):
                 setup_position = bone.position if bone else (0.0, 0.0)
-                bone_tracks["translate"] = _clamp_first_last([
-                    {
+                translate_keys = props["translate"]
+                entries = []
+                for index, k in enumerate(translate_keys):
+                    entry = {
                         "time": round(k.time, 6),
                         "x": round(k.x - setup_position[0], 6),
                         "y": round(-(k.y - setup_position[1]), 6),
-                        **({"curve": [round(c, 6) for c in k.curve]}
-                           if k.curve else {}),
                     }
-                    for k in props["translate"]
-                ], "value")
+                    entry.update(curve_field(
+                        k, translate_keys[index + 1]
+                        if index + 1 < len(translate_keys) else None,
+                        (entry["x"], entry["y"]),
+                        (lambda v: v - setup_position[0],
+                         lambda v: setup_position[1] - v)))
+                    entries.append(entry)
+                bone_tracks["translate"] = _clamp_first_last(entries)
             if props.get("scale"):
                 # Absolute local scale, no axis mirroring: the Godot values
                 # ARE the spine values.
-                bone_tracks["scale"] = _clamp_first_last([
-                    {
+                scale_keys = props["scale"]
+                entries = []
+                for index, k in enumerate(scale_keys):
+                    entry = {
                         "time": round(k.time, 6),
                         "x": round(k.scale[0], 6),
                         "y": round(k.scale[1], 6),
-                        **({"curve": [round(c, 6) for c in k.curve]}
-                           if k.curve else {}),
                     }
-                    for k in props["scale"]
-                ], "value")
+                    entry.update(curve_field(
+                        k, scale_keys[index + 1]
+                        if index + 1 < len(scale_keys) else None,
+                        (entry["x"], entry["y"]),
+                        (lambda v: v, lambda v: v)))
+                    entries.append(entry)
+                bone_tracks["scale"] = _clamp_first_last(entries)
             if bone_tracks:
                 animation["bones"][bone_name] = bone_tracks
         slot_tracks = model.slot_timelines.get(anim_name) or {}
@@ -464,7 +390,7 @@ def write_spine_json(model: Skeleton, output_path: str,
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
     for att in model.attachments:
-        if not att.equipped:
+        if not att.setup:
             continue  # setup-pose bounds only count what the rig draws
         poly_world = world.get(att.name) or (world.get(model.bones[0].name) if model.bones else None)
         if not poly_world:

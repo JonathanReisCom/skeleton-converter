@@ -7,9 +7,11 @@ numerically instead of trusted by eye.
 
 ## Status
 
-Working today: Godot Skeleton2D scenes (.tscn) ⇄ Spine JSON, both directions,
-numeric round-trip validated. Next: DragonBones and LoongBones adapters via the
-same canonical model — see [ROADMAP.md](ROADMAP.md).
+Working today: Godot Skeleton2D scenes (.tscn) ⇄ Spine JSON in both
+directions, anything → SkelForm (`.skf`), everything proven by numeric
+round-trip validation — plus a browser studio that converts an upload into
+every other format and plays the results side by side. Next: DragonBones and
+LoongBones adapters via the same canonical model — see [ROADMAP.md](ROADMAP.md).
 
 ## Why
 
@@ -35,6 +37,10 @@ python3 -m src.cli convert --to spine \
 # Spine JSON -> Godot scene: out/animation.tscn + the page image
 python3 -m src.cli convert --to godot \
   path/to/hero.json -o out --name animation
+
+# Anything -> SkelForm bundle: out/animation.skf (armature + its pages)
+python3 -m src.cli convert --to skelform \
+  path/to/hero.json -o out --name animation
 ```
 
 `-o` is a **directory** (created if missing) and `--name` is the output stem;
@@ -49,38 +55,77 @@ specific `res://` path instead of the copied image.
 A `.tscn` is a Godot scene: there is no browser preview for it. Only `--to
 spine` writes a servable `index.html` — see [Viewer](#viewer).
 
+## Studio
+
+```bash
+python3 -m src.studio        # http://localhost:8090  (or `make studio`)
+make studio-stop             # stop a studio left serving STUDIO_PORT
+```
+
+`make studio` never fights for the port: if one is already serving it prints the
+URL and the two ways out (`make studio-stop`, or `make studio STUDIO_PORT=8644`).
+`studio-stop` only kills a process that *is* a studio — another server on that
+port is reported and left alone.
+
+Drop a rig in the page and the studio detects the source format, converts it
+into **every other format**, and opens the comparator over all of them — the
+source in the first pane and one pane per converted output after it, the same
+panes the compare shell emits, with a shared clock. The **folder** is
+how a rig travels with everything it references: click *choose a folder* (or
+drop the folder on the zone) and every file inside comes along, so a Spine
+`.json` arrives with its `.atlas` and page image without hunting for them. A
+picker of individual files hands over exactly what you marked and no more —
+the CLI can scan the JSON's folder because it runs on disk; a
+browser page cannot, it only sees the files it was given.
+
+The panes are the point: the **first** pane plays the file you brought (the
+Spine rig with its own atlas, the SkelForm archive, or the Godot scene packed
+unmodified for the browser engine), and every pane after it plays what a
+conversion wrote — the Spine runtime, real Godot, or SkelForm's own web player
+on the written `.skf`. A rig is never converted into the format it arrived in.
+Only when a pane cannot be built (a Godot target without an engine binary to
+export with) does a side fall back to replaying through the Spine leg, and its
+folder name then says `via-spine`.
+
+Jobs land under `tmp/studio/` (`--root` moves that): each one keeps the upload,
+every pane and its `compare.html`, and the studio page lists the recent ones —
+one row each, with a `remove` button that deletes that job (upload, panes and
+page). Nothing prunes the folder otherwise, and a job that carried a Godot pane
+weighs ~40 MB, so it is worth clearing once you are done with it.
+
+A rig that arrived without something the comparison needs is reported where it
+can be read: the job's notes stay on the page (with a link to the comparison)
+instead of flashing past on the way to it. A Spine pane built from a JSON whose
+atlas never came along says so in its own header and is marked `not loaded`,
+while the other pane keeps playing — the shared clock skips the dead side
+instead of waiting for it.
+
+`--to skelform` writes one archive (`.skf`) holding the armature and a copy of
+the rig's pages — what the SkelForm editor and its runtimes load — plus an
+`index.html` that plays that archive in the browser through SkelForm's own web
+player (runtime and player pinned by commit). That
+format stores key times as **integer frames**, so its `fps` decides how exactly
+the source's times survive: the converter picks 60 fps, moves to a finer grid
+only when that stops two keys from collapsing into one, and reports on the
+conversion line what the choice cost (`--fps` overrides it).
+
 Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
 
-## Shortcuts
+## Command line
 
-`make` wraps the two flows, so you do not retype paths or remember which
-direction is previewable. Put your rig paths in `local.mk` (gitignored; copy
-the lines from the Makefile header) and then:
-
-```bash
-make godot-to-spine    # .tscn -> bundle, then serves it at :8642
-make spine-to-godot    # Spine JSON -> .tscn + page image
-make test
-```
-
-Anything can be overridden per run:
-
-```bash
-make godot-to-spine GODOT_INPUT=path/to/player.tscn NAME=bot PORT=9000
-```
-
-Only `godot-to-spine` starts a server, because only that direction produces a
-browser-viewable bundle; `spine-to-godot` prints where to load the scene
-instead. Both refuse to run without an input path, and refuse to `rm -rf` an
-output of `/`.
+`make` holds only what is not a page: `make studio`, `make studio-stop` and
+`make test`. Every conversion is a `python3 -m src.cli convert` call (see
+[Quick start](#quick-start)) — that is the disk-side path, writing into the
+`-o` directory you name, which is what a project needs; the studio writes into
+its own job folder under `tmp/studio/`. Both refuse a path they cannot write
+and never touch anything outside the directory you gave them.
 
 Every step is printed as it happens, including what the source rig contained:
 
 ```
---> clearing old output: ~/Desktop/convert-spine-to-godot
 --> converting Spine JSON -> Godot scene
 --> reading spine: .../hero/export/hero-pro.json
---> destination: ~/Desktop/convert-spine-to-godot
+--> destination: out
 --> name: animation
 --> atlas: .../hero/export/hero.atlas
 --> constraints baked (skin 'default'): left-leg, look-constraint, right-leg
@@ -103,9 +148,9 @@ Every conversion direction has a browser preview:
 
 - **Godot→Spine** output: `view out.json` (or the convert step already emits
   `index.html`) — renders via the official `spine-webgl` runtime from the CDN.
-- **Any Godot scene** (`make godot-preview`): packs an existing `.tscn` with
-  its referenced resources and runs it in the browser through the real engine.
-  Uses the same `GODOT_INPUT`/`GODOT_OUT`/`GODOT_PORT` variables.
+- **Any Godot scene**: drop the `.tscn`'s folder in the studio and its first
+  pane packs the scene with its referenced resources and runs it in the browser
+  through the real engine — no conversion needed to look at it.
 - **Spine→Godot** output: the convert step builds a **web preview of the real
   Godot scene** — a WASM export of the actual `.tscn` running in the actual
   engine, in a `preview/` subfolder, wrapped by
@@ -307,6 +352,126 @@ so there is no mirroring to get wrong. A Spine key that omits `x`/`y` means
 **1**, not the previous key (the runtime's `readTimeline2` default). Emitted as
 `:scale` value tracks or per-axis `:scale:x`/`:scale:y` bezier tracks.
 
+### SkelForm: radians, absolute values, and curves that belong to the next key
+
+SkelForm (`.skf`, a ZIP holding `armature.json` plus atlas pages) stores a
+Y-up, CCW-positive space, so the reader mirrors exactly like the Spine leg
+(`y -> -y`, `rot -> -degrees(rot)`). Three of its rules differ from every
+other format here:
+
+- **Rotation is in radians** in the file (`Animate` feeds it straight to
+  `cos`/`sin`).
+- **Animation values are absolute field targets** and each `element`
+  (`PositionX`, `PositionY`, `Rotation`, `ScaleX`, `ScaleY`, `Hidden`) has its
+  own keyframe list with its own times, keyed on integer frames
+  (`time = frame / fps`). The model keeps one key list per track, so the two
+  axes of a position or scale are merged on the union of their times.
+- **A segment's bezier handles live on the keyframe that ENDS it**, normalized
+  to the segment box, while the model keeps absolute control points on the key
+  that starts it — the curve converts with a scale-and-offset, and stepped
+  segments become the `Snap` preset (handles with `y == 999`).
+
+A visual is either a texture rectangle (SkelForm stores it as *no vertices at
+all*: the editor keeps a rect as `±size/2` around its bone, per
+`utils::bone_meshes_edited`) or a skinned mesh (`vertices` + `indices` +
+`binds`, where `binds[].bone_id` is a bone id, `binds[].verts[].id` a **vertex**
+id, and an `is_path` bind drags vertices along a path). The model records which
+one it was (`Attachment.mesh`) so a writer never collapses a skinned quad back
+into a rectangle.
+
+**The stored handles are used verbatim.** Older exports leave `Linear`
+keyframes with zeroed handles; `interp` reads the numbers, so that really is a
+cubic ease in every runtime playing the file. "Fixing" it to a straight line
+here would silently disagree with the runtime. The preset table exists for the
+*writer*, which picks the preset matching the curve it emits.
+
+**Attachment points are world-space minus one translation.** Every reader here
+stores an attachment's points as `world - anchor_world.xy` (the anchor being the
+bone that carries most of its weight), so the bone's **rotation stays baked in**
+and only the translation comes out. SkelForm's runtime instead applies the
+owning bone's full transform to every vertex (`inheritVert`), so its files carry
+bone-local points — and the two are not each other's inverse by translation
+alone. Converting needs the bone as well: re-add the anchor's translation and
+apply the bone's inverse on the way out, and the exact reverse on the way in.
+Skipping that rotates every attachment by its bone's setup angle — the pieces
+stay textured, keep animating, and land in the wrong place, which is the kind of
+bug a rig without rotated bones never shows.
+
+**An animation's keyframes are walked, not indexed.** `SkfGenericAnimate` runs
+`for (k …) { if (kf.frame > frame) break; … }` over the file's `keyframes` array,
+so that array must be **in frame order** and every entry's `next_kf` must point at
+the next keyframe *of the same (bone, element)*, ending each chain with `-1` —
+the editor's own files do exactly that. Written grouped by bone and element
+instead (the natural way out of a model that keeps one key list per channel),
+everything past the first keyframe is skipped: the file carries a complete
+animation, the runtime reports the right frame, and the rig just plays its setup
+pose. The keyframe *order* is as load-bearing as the values.
+
+**How a bundle's pages are laid out is a runtime contract, and the official
+player gets it wrong.** Its `skfReadFile` (`api.js`) declares `let atlasIdx = 0`
+*inside* the member loop, so the `atlasIdx++` that follows is dead code: every
+page image it finds overwrites `atlases[0]` and pages 1..n never get a texture.
+Two consequences, both verified by reading that file and then watching a
+multi-page rig draw:
+
+- the page **number** comes from iteration order over the archive, not from the
+  member name, so the writer emits `armature.json` first and the pages in the
+  order `atlases` lists them (`atlas0.png`, `atlas1.png`, …). Any other order
+  textures every attachment from the wrong image.
+- the player can still only ever fill page 0, so this project's SkelForm pane
+  reads the archive itself (JSZip, already loaded for the player) and fills in
+  the pages the loader missed. Single-page rigs — the common case — are
+  untouched.
+
+The pane also has to speak the camera's terms exactly, and `SkfDraw` applies
+them with two different Y conventions: a **bone** becomes `pos * scale +
+position`, while a **vertex** — what a mesh visual actually draws — becomes
+`-pos.y * scale - position.y`. Framing must use the *vertex* one (negated
+offset) and must measure its box **before** the draw loop runs, while the
+vertices still hold the constructed world positions unnegated. Get either half
+wrong and the rig is drawn entirely above the canvas: the draws still happen
+(hundreds of them, thousands of indices, `getError()` clean), so the pane looks
+broken for no visible reason. Read the drawn box when this happens — that is
+what found it.
+
+Curves normally transfer verbatim between the two runtimes (both solve the same
+cubic over the normalized segment), with two rules worth knowing:
+
+- **A two-axis track's curve is one quadruple per axis** (8 numbers). A lone
+  quadruple makes a Spine reader take the second axis's controls from beyond
+  the array and the runtime fills the bone with NaN — the reader therefore
+  always emits the full layout, giving an axis without keys a straight
+  quadruple at its setup value.
+- **A fully zeroed handle pair** (both value controls collapsed onto the
+  segment's start) is *nearly* linear in SkelForm — its five Newton iterations
+  do not fully converge — while Spine's pre-sampled table is closer to the
+  exact straight line. Such a segment is written without a curve: the two
+  runtimes then differ by ≤0.6 units on a 2048-unit rig, the same class of
+  difference the Spine leg already documents for its own bezier table.
+
+Two representability limits, both measured by
+`validation/verify_skelform.py` against a port of the runtime's own semantics
+(`validation/skelform_semantics.py`):
+
+- **Per-axis key times.** SkelForm keys `PositionX` and `PositionY`
+  independently, and often only *one* of them (a bone may animate `ScaleY`
+  alone). The canonical model keeps one key list per track, so the other axis
+  is resampled onto the union of times — exact at keys, approximate between
+  them (worst measured: ~30 units on a 2048-unit rig, ~1.5%; 20.3 units on the
+  `hero` `run` animation, whose `position:x` and `position:y` tracks peak at
+  different frames).
+- **Non-standard inheritance.** `inheritance()` adds rotations and multiplies
+  scales componentwise before rotating the offset, which equals a standard TRS
+  composition only while the parent's scale is uniform. With a non-uniform
+  animated scale the two disagree; a rig that writes ordinary bone transforms
+  cannot reproduce the runtime exactly there.
+
+Pivot translation travels as the attachment's node `position`, and a pivot
+rotation/scale is folded into the vertices (exact while the bone's own scale is
+uniform — the two matrices do not commute otherwise). Not converted (reported
+through the reader's notes): inverse kinematics, sway/bounce physics, tints,
+`Texture` swaps and path binds.
+
 ### Spine `inherit` modes
 
 A bone with `noRotationOrReflection` (common on feet) does not follow the
@@ -321,13 +486,33 @@ Hub-and-spoke. A canonical in-memory model, one importer and one exporter per
 format:
 
 ```
-in_godot ──> model ──> out_spine
-in_spine ──> model ──> out_godot
+          ┌─> out_spine
+in_godot ─┼─> out_godot
+in_spine ─┼─> out_skelform
+in_skelform ─┴─> out_tres
 ```
+
+Any reader pairs with any writer: `--from` and `--to` are independent, and the
+CLI refuses a pair only when the format has no adapter. Every wired direction
+is exercised by CI over a synthesized rig (`tests/ci_rig.py`).
 
 Adding a format means writing two adapters, not N² converters. Every adapter is
 verified by round-trip: `A → model → A` with numeric tolerance, and `A → B → A`
 cross-checks.
+
+Two rules keep the hub format-agnostic, and both exist because breaking them
+produced wrong files:
+
+- **A curve lives in the value space of the key it belongs to.** One quadruple
+  `[t1, v1, t2, v2]` on a single-value track, one per value axis on a two-axis
+  track — stored as `Key.curve`. Every reader produces it there and every
+  writer maps it through the same transform it applies to the key values, so
+  no format's convention becomes the rig's.
+- **A two-axis track carries 8 numbers, and its two elements take one
+  quadruple each.** Spine indexes the curve by axis, so a lone quadruple makes
+  the runtime fill the bone with NaN, and an exporter that hands the same
+  quadruple to both elements bends the second axis with the first one's shape
+  — invisible at key times, wrong in between.
 
 ## The verification loop
 

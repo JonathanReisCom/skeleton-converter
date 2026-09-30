@@ -13,7 +13,8 @@ them by hand.
 """
 import math
 
-from src.constraints import ConstraintSolver, bake_animation, unsupported_constraints
+from src.constraints import (ConstraintSolver, _sample_pose, bake_animation,
+                             unsupported_constraints)
 
 
 def _two_bone_ik_rig() -> dict:
@@ -110,6 +111,85 @@ def test_skin_required_bone_is_inactive_and_keeps_no_baked_keys():
 
     baked = bake_animation(rig, "swing", skin="default")
     assert "chain1" not in baked
+
+
+def _rotation_rig() -> dict:
+    """A chain whose last bone refuses its parent's rotation.
+
+    ``noRotationOrReflection`` builds the bone's world from its own rotation,
+    cancelling the parent's instead of inheriting it — the hero's feet are the
+    real-world case.
+    """
+    return {
+        "skeleton": {"spine": "4.2.22"},
+        "bones": [
+            {"name": "root"},
+            {"name": "shin", "parent": "root", "length": 40, "rotation": 30},
+            {"name": "foot", "parent": "shin", "x": 40, "length": 20,
+             "rotation": 10, "inherit": "noRotationOrReflection"},
+        ],
+        "skins": [{"name": "default"}],
+        "animations": {"walk": {"bones": {
+            "shin": {"rotate": [{"time": 0.0, "value": 0.0},
+                                {"time": 1.0, "value": 70.0}]},
+            "foot": {"rotate": [{"time": 0.0, "value": 0.0},
+                                {"time": 1.0, "value": -25.0}]},
+        }}},
+    }
+
+
+def _baked_value(baked: dict, name: str, time: float) -> float:
+    """Sample a baked channel the way the runtime does: linear between keys."""
+    keys = (baked.get(name) or {}).get("rotate") or []
+    if not keys:
+        return 0.0
+    if time <= keys[0]["time"]:
+        return keys[0]["value"]
+    for before, after in zip(keys, keys[1:]):
+        if time <= after["time"]:
+            span = after["time"] - before["time"]
+            if span <= 0:
+                return after["value"]
+            ratio = (time - before["time"]) / span
+            return before["value"] + (after["value"] - before["value"]) * ratio
+    return keys[-1]["value"]
+
+
+def test_a_bone_that_ignores_its_parents_rotation_bakes_under_normal_inheritance():
+    """The file has ONE inheritance mode, so the bake must cancel the parent.
+
+    ``noRotationOrReflection`` gives the bone its own world rotation whatever
+    the parent does, and the source's local carries exactly that. Stored
+    verbatim, the file — which only has normal inheritance — adds the parent's
+    rotation on top: the hero's feet rode a whole shin rotation (104.6 degrees)
+    off the source, on every animated frame. The baked keys must reproduce the
+    SOURCE's world rotation.
+    """
+    rig = _rotation_rig()
+    setup = {bone["name"]: bone for bone in rig["bones"]}
+    baked = bake_animation(rig, "walk", skin="default")
+    assert "foot" in baked, baked
+
+    for time in (0.0, 0.2, 0.5, 0.8, 1.0):
+        pose = _sample_pose(rig["animations"]["walk"], time, setup)
+        solver = ConstraintSolver(rig, skin="default", pose=pose)
+        solver.apply()
+        source = math.degrees(math.atan2(solver.bones["foot"].c,
+                                         solver.bones["foot"].a))
+        # The file accumulates its locals, one per bone; the frame mirrors y, so
+        # the file's world rotation is the negative of the source-space locals
+        # it stores summed along the chain. A bone the bake did not touch keeps
+        # the animation's own key, which is why the pose is sampled too.
+        ours = 0.0
+        for name in ("root", "shin", "foot"):
+            if name in baked:
+                ours += setup[name].get("rotation", 0.0) \
+                    + _baked_value(baked, name, time)
+            else:
+                ours += pose.get(name, (0.0, 0.0,
+                                        setup[name].get("rotation", 0.0)))[2]
+        off = ((source - ours + 540.0) % 360.0) - 180.0
+        assert abs(off) < 0.5, f"t={time}: source {source:.3f} vs file {ours:.3f}"
 
 
 def test_unsupported_constraints_are_reported():

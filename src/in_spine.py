@@ -13,8 +13,7 @@ from pathlib import Path
 
 from .model import (
     Attachment, Bone, Key, Skeleton,
-    compose, invert, mirror_matrix, mirror_point, multiply, transform,
-    spine_world_transforms,
+    compose, invert, multiply, transform,
 )
 
 
@@ -84,15 +83,6 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
     return regions
 
 
-def resolve_image_for_atlas(atlas_path: str | None, texture_path: str) -> str:
-    """Filesystem path of the PNG the atlas page names."""
-    if atlas_path and Path(atlas_path).exists():
-        for line in Path(atlas_path).read_text().splitlines():
-            if line and not line.startswith((" ", "\t")):
-                return str(Path(atlas_path).parent / line.strip())
-    return texture_path
-
-
 def constraint_worlds(spine: dict, skin: str | None = None) -> dict:
     """Bone name -> world matrix (spine space, y-up) from the RUNTIME solver:
     setup pose, constraints applied, skin gating. The runtime leaves bones a
@@ -108,50 +98,7 @@ def constraint_worlds(spine: dict, skin: str | None = None) -> dict:
     }
 
 
-def read_png_size(path: str) -> tuple | None:
-    """Width/height from a PNG's IHDR chunk."""
-    try:
-        with open(path, "rb") as handle:
-            header = handle.read(24)
-    except OSError:
-        return None
-    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
-        return None
-    return (
-        int.from_bytes(header[16:20], "big"),
-        int.from_bytes(header[20:24], "big"),
-    )
-
-
-def spine_attachment_map(spine: dict) -> dict:
-    """slot name -> (attachment name, attachment dict) from the default skin.
-
-    Prefers the slot's setup attachment (what the runtime draws by default);
-    falls back to the first skin entry when the setup attachment is absent
-    or unnamed.
-    """
-    skins = spine["skins"]
-    attachments = (
-        skins[0]["attachments"] if isinstance(skins, list) else next(iter(skins.values()))
-    )
-    setups = {slot["name"]: slot.get("attachment")
-              for slot in spine.get("slots", [])}
-    out = {}
-    for slot_name, entries in attachments.items():
-        pick = None
-        for attachment_name, attachment in entries.items():
-            if attachment_name == setups.get(slot_name) \
-                    or attachment.get("name", attachment_name) == setups.get(slot_name):
-                pick = (attachment_name, attachment)
-                break
-            if pick is None:
-                pick = (attachment_name, attachment)
-        if pick:
-            out[slot_name] = pick
-    return out
-
-
-def region_uv_rect(region: dict, page_w: float, page_h: float) -> tuple:
+def region_uv_rect(region: dict) -> tuple:
     x, y = region["x"], region["y"]
     w, h = region["width"], region["height"]
     if region.get("degrees") == 90:
@@ -159,14 +106,14 @@ def region_uv_rect(region: dict, page_w: float, page_h: float) -> tuple:
     return (x, y, x + w, y + h)
 
 
-def region_corner_uvs(region: dict, page_w: float, page_h: float) -> list:
-    left, top, right, bottom = region_uv_rect(region, page_w, page_h)
+def region_corner_uvs(region: dict) -> list:
+    left, top, right, bottom = region_uv_rect(region)
     if region.get("degrees") == 90:
         return [(right, bottom), (left, bottom), (left, top), (right, top)]
     return [(left, bottom), (left, top), (right, top), (right, bottom)]
 
 
-def region_uv_for_vertex(region: dict, u: float, v: float, page_w: float, page_h: float) -> tuple:
+def region_uv_for_vertex(region: dict, u: float, v: float) -> tuple:
     original_w = region.get("originalWidth", region["width"])
     original_h = region.get("originalHeight", region["height"])
     offset_x = region.get("offsetX", 0)
@@ -180,14 +127,24 @@ def region_uv_for_vertex(region: dict, u: float, v: float, page_w: float, page_h
     return (base_u + u * original_w, base_v + v * original_h)
 
 
-def _effective_local(spine: dict, bone_name: str, pose: dict | None) -> tuple:
-    """Solve the local transform that yields the inherit-aware world."""
-    world = spine_world_transforms(spine, pose)
-    bone = next(b for b in spine["bones"] if b["name"] == bone_name)
-    parent_name = bone.get("parent")
-    if not parent_name:
-        return world[bone_name]
-    return multiply(invert(world[parent_name]), world[bone_name])
+def _curve_in_key_space(curve, value_map, axis: int | None = None):
+    """A Spine curve's value components -> the key's own value space.
+
+    Spine control points are absolute time/value in the timeline's own space
+    (offsets from setup for translate, degrees for rotate); the rig stores
+    every curve in the space of the key values it belongs to, so a reader
+    maps the value components through the same transform it applies to the
+    values themselves. ``axis`` selects one quadruple of a two-axis track;
+    ``None`` maps every quadruple, which is what rotate and scale need.
+    """
+    if not isinstance(curve, (list, tuple)):
+        return curve
+    out = list(curve)
+    start = 0 if axis is None else axis * 4
+    for base in range(start, len(out) - 3, 4):
+        out[base + 1] = value_map(out[base + 1])
+        out[base + 3] = value_map(out[base + 3])
+    return tuple(out)
 
 
 def read_skeleton(json_path: str, atlas_path: str | None = None,
@@ -199,21 +156,6 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     """
     spine = read_spine(json_path)
     atlas_regions = read_atlas_regions(atlas_path)
-    # Multi-page atlases: every page has its own size, and every region
-    # belongs to one page. Resolve each page's PNG beside the atlas and read
-    # its IHDR — UVs must be scaled against the region's own page, not the
-    # first one.
-    atlas_dir = Path(atlas_path).parent if atlas_path else Path(json_path).parent
-    page_sizes: dict = {}
-    for region in atlas_regions.values():
-        page = region.get("page")
-        if page and page not in page_sizes:
-            page_sizes[page] = read_png_size(str(atlas_dir / page))
-    page_size = page_sizes.get(next(iter(atlas_regions.values()))["page"]) \
-        if atlas_regions else read_png_size(
-            resolve_image_for_atlas(atlas_path, json_path))
-    page_width, page_height = page_size if page_size else (1, 1)
-
     model = Skeleton()
     model.texture_path = ""
     if atlas_path:
@@ -224,16 +166,23 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         )
 
     # ---- bones: mirror to Godot space, solving effective locals for inherit
+    from . import constraints
+    # ONE map of the RUNTIME's setup worlds, for everything below: constraints
+    # solved, inherit modes applied, skin-gated bones left at the origin. Bones,
+    # attachment vertices and bind frames all read it, and it used to be
+    # recomputed per attachment (a full solver run each time).
+    worlds = constraint_worlds(spine, skin=skin)
+    solved_names = constraints.resolved_setup_bones(spine)
+    identity = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
     bone_relative_path = {}
     for bone_data in spine["bones"]:
         name = bone_data["name"]
         parent_name = bone_data.get("parent")
+        parent_world = worlds.get(parent_name, identity) if parent_name else identity
         if bone_data.get("inherit", "normal") != "normal":
             # Godot has no inherit modes: solve for the local that produces the
             # same world transform under normal inheritance.
-            world = spine_world_transforms(spine)
-            parent_world = world.get(parent_name, (1, 0, 0, 1, 0, 0)) if parent_name else (1, 0, 0, 1, 0, 0)
-            local = multiply(invert(parent_world), world[name])
+            local = multiply(invert(parent_world), worlds[name])
             position = (local[4], -local[5])
             rotation_deg = math.degrees(math.atan2(-local[2], local[0]))
         else:
@@ -263,6 +212,21 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 bone_data.get("restRotation", 0.0),
                 (bone_data.get("restScaleX", 1.0), bone_data.get("restScaleY", 1.0)),
             )
+        if name in solved_names:
+            # Godot and SkelForm cannot run a constraint, so the bones one drives
+            # — and those ignoring their parent's rotation — carry the SOLVED
+            # setup local as well: the source's setup pose IS constraint-solved,
+            # so without this a static scene stands in a pose the source never
+            # shows (the hero's `thigh1` was 8.4 degrees off, the last of the
+            # framing difference between the two panes). The raw local stays in
+            # `position`/`rotation_deg`, which the Spine leg re-exports together
+            # with the constraints and must not solve twice.
+            local = multiply(invert(parent_world), worlds[name])
+            bone.setup_solved = (
+                (local[4], -local[5]),
+                math.degrees(math.atan2(-local[2], local[0])),
+                (math.hypot(local[0], local[2]), math.hypot(local[1], local[3])),
+            )
         model.bones.append(bone)
         model.by_name[name] = bone
 
@@ -274,6 +238,17 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     skin_attachments = (
         skins[0]["attachments"] if isinstance(skins, list) else next(iter(skins.values()))
     )
+    # Mirror the runtime's ACTIVITY gate: a bone flagged `skin: true` (Spine's
+    # skinRequired) starts inactive, and `Skeleton.updateCache` only activates
+    # the ACTIVE skin's own bones and their ancestors. A slot on an inactive
+    # bone draws nothing, so its entries are not equipped — the hero's `chain*`
+    # bones are declared by the `weapon/morningstar` skin alone, and the
+    # default-skin rig must not render the chain its JSON and atlas still
+    # describe. Without this the converted rig draws weapons the Spine pane
+    # never shows, and they stretch its framing box out with them.
+    from . import constraints
+    inactive = (set(bone["name"] for bone in spine["bones"])
+                - constraints.active_bones(spine, skin))
     # Mirror the runtime's equipping: a skin entry is drawn only when it is
     # the slot's setup attachment or an attachment timeline equips it. The
     # Spine runtime never renders the rest; the Godot leg hides them.
@@ -298,7 +273,8 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         slot_name = slot["name"]
         host = slot["bone"]
         entry_name = att.get("name", attachment_name)
-        is_equipped = entry_name in equipped_by_slot.get(slot_name, set())
+        is_equipped = entry_name in equipped_by_slot.get(slot_name, set()) \
+            and host not in inactive
         uvs = att.get("uvs", [])
         width = att.get("width", 1.0) or 1.0
         height = att.get("height", 1.0) or 1.0
@@ -307,12 +283,9 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         triangles = att.get("triangles", [])
 
         region = atlas_regions.get(attachment_name) or atlas_regions.get(slot_name)
-        # UVs scale against the region's own page in multi-page atlases.
-        pw, ph = (page_sizes.get(region["page"]) or (page_width, page_height)) \
-            if region and region.get("page") else (page_width, page_height)
         if region:
             region_left, region_top, region_right, region_bottom = region_uv_rect(
-                region, pw, ph
+                region
             )
         else:
             region_left, region_top = 0.0, 0.0
@@ -347,11 +320,20 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 # Spine space (y-up) — the polygon conversion below mirrors
                 # once. Pre-mirroring here would double-flip Y.
                 world_points.append((wp[0], wp[1]))
+            # The uv must be the PER-CORNER pair the source's runtime samples
+            # for the same corner (`RegionAttachment.updateRegion`): corner 0
+            # is (left, bottom) of the packed rect, and the list walks the
+            # corners the same way the geometry does. Pairing them any other
+            # way — the old list started at (left, top) — flips v, so every
+            # region the writer has to draw as geometry (any rotation that is
+            # not a multiple of 90) came out upside down while the mesh path
+            # beside it was correct. `region_corner_uvs` is that mapping, and
+            # meshes already used it.
             if region:
-                left, top, right, bottom = region_uv_rect(region, pw, ph)
-                uv_points = [[left, top], [right, top], [right, bottom], [left, bottom]]
+                uv_points = [list(pair) for pair in
+                             region_corner_uvs(region)]
             else:
-                uv_points = [[0, 0], [width, 0], [width, height], [0, height]]
+                uv_points = [[0, height], [0, 0], [width, 0], [width, height]]
             weights_by_bone[host] = {i: 1.0 for i in range(4)}
         elif bones or (vertices and isinstance(vertices[0], (int, float))
                        and int(vertices[0]) >= 1 and len(uvs) // 2 != len(vertices) // 2):
@@ -386,7 +368,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             for uv_index in range(0, min(len(uvs), vertex_count * 2), 2):
                 if region:
                     uv_points.append(list(region_uv_for_vertex(
-                        region, uvs[uv_index], uvs[uv_index + 1], pw, ph
+                        region, uvs[uv_index], uvs[uv_index + 1]
                     )))
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
@@ -402,7 +384,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             for uv_index in range(0, min(len(uvs), len(vertices)), 2):
                 if region:
                     uv_points.append(list(region_uv_for_vertex(
-                        region, uvs[uv_index], uvs[uv_index + 1], pw, ph
+                        region, uvs[uv_index], uvs[uv_index + 1]
                     )))
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
@@ -432,7 +414,28 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             polygon=[(p[0] - anchor_world[4], -(p[1] - anchor_world[5]))
                      for p in world_points],
             uv=uv_points,
-            polygons=triangles,
+            # Spine's `triangles` is a soup; the rig keeps one group per
+            # triangle (a writer that fans a group must never see 192 indices
+            # as a single polygon).
+            #
+            # A region attachment has no `triangles` key — Spine only writes
+            # them for meshes — but a quad IS two triangles. Without them the
+            # writer's mesh path emits four vertices and NO faces, so the
+            # runtime rasterizes nothing: the hero's limbs (every region whose
+            # `rotation` is not a multiple of 90, which cannot collapse into a
+            # texture rect) simply do not draw.
+            polygons=([triangles[i:i + 3]
+                       for i in range(0, len(triangles) - 2, 3)]
+                      or ([[0, 1, 2], [0, 2, 3]] if len(world_points) == 4
+                          else [])),
+            # `constructVerts` starts every vertex at the OWNING bone's
+            # transform (`inheritVert(init_pos, ownerBone)`) before the binds
+            # move it, so the writer needs that world too. The owner is the
+            # anchor the polygon is already keyed against, and it is often a
+            # bone the source did not list weights for.
+            bind_worlds={bn: world[bn] for bn in weights_by_bone
+                         if bn in world}
+            | {name: world[name] for name in (anchor, host) if name in world},
             weights=[
                 (bn, [vw.get(i, 0.0) for i in range(len(world_points))])
                 for bn, vw in weights_by_bone.items()
@@ -441,9 +444,16 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             equipped=is_equipped,
             # The runtime draws the slot's setup attachment when no timeline
             # has applied yet; a slot whose setup attachment is absent draws
-            # nothing there.
+            # nothing there — and neither does a slot on a bone the skin
+            # deactivates. This single flag is what every leg asks ("does the
+            # SETUP pose draw this?"): out_godot's initial `visible`,
+            # out_spine's slot attachment and bounds, and out_skelform's
+            # `hidden`/`init_hidden`. `equipped` answers the different question
+            # of whether any animation ever draws the entry.
             setup=bool(setup_by_slot.get(slot_name))
-            and entry_name == setup_by_slot.get(slot_name),
+            and entry_name == setup_by_slot.get(slot_name)
+            and host not in inactive,
+            uv_rotation=int(region.get("degrees", 0) or 0) if region else 0,
             page=region["page"] if region else "",
         ))
 
@@ -469,11 +479,8 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 tracks.setdefault(bone_name, {})["rotate"] = [
                     Key(time=k.get("time", 0.0),
                         angle=-(setup_rot + k.get("value", 0.0)),
-                        # Curve stays in spine space (absolute time/value
-                        # control points, per CurveTimeline.setBezier). Each
-                        # writer maps it to its own interpolation; see
-                        # out_godot.
-                        curve=k.get("curve"))
+                        curve=_curve_in_key_space(
+                            k.get("curve"), lambda v: -(setup_rot + v)))
                     for k in props["rotate"]
                 ]
             if props.get("translate"):
@@ -481,7 +488,9 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                     Key(time=k.get("time", 0.0),
                         x=setup_pos[0] + k.get("x", 0.0),
                         y=-(setup_pos[1] + k.get("y", 0.0)),
-                        curve=k.get("curve"))
+                        curve=_curve_in_key_space(
+                            k.get("curve"),
+                            lambda v: -(setup_pos[1] + v), axis=1))
                     for k in props["translate"]
                 ]
             if props.get("scale"):

@@ -11,11 +11,14 @@ wall.
 from __future__ import annotations
 
 import shutil
+import zipfile
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import in_spine, out_godot, out_spine, registry
+from . import out_godot, out_spine, registry
 
 StepFn = Callable[[str], None]
 
@@ -54,10 +57,93 @@ def _find_atlas(input_path: Path) -> str | None:
     return str(candidates[0]) if len(candidates) == 1 else None
 
 
+def _skelform_drawn_visuals(bundle: Path) -> int | None:
+    """How many visuals the written archive hangs off a bone (``None`` if the
+    archive cannot be read). One visual per bone is the format's own rule."""
+    if bundle.suffix.lower() != ".skf":
+        return None            # a bare armature.json: nothing to count
+    try:
+        with zipfile.ZipFile(bundle) as archive:
+            armature = json.loads(archive.read("armature.json"))
+    except Exception:
+        # A diagnostic must never be the thing that fails a conversion.
+        return None
+    return len({bone["visuals_id"] for bone in armature.get("bones", [])
+                if bone.get("visuals_id", -1) != -1})
+
+
+@contextmanager
+def _rig_pages(input_path: str, source: str, atlas_path: str | None, model):
+    """The rig's atlas page images, first page first, for as long as it runs.
+
+    A reader whose images live *inside* the input unpacks them through the
+    registry hook, into a scratch directory that lives exactly as long as the
+    pages are needed (they are a source for a copy or an archive member, not
+    output). Otherwise the pages sit beside the rig file — beside the atlas
+    when there is one — and their names come from the attachments, so the
+    orchestrator needs no format knowledge.
+    """
+    hook = getattr(registry.READER_MODULES.get(source), "extract_assets", None)
+    if hook is not None:
+        with tempfile.TemporaryDirectory(prefix="skeleton-converter-") as scratch:
+            yield hook(input_path, scratch)
+        return
+    base = Path(atlas_path).parent if atlas_path else Path(input_path).parent
+    pages = [str(base / page) for page in sorted({a.page for a in model.attachments
+                                                  if a.page})
+             if (base / page).exists()]
+    if not pages and model.texture_path:
+        # A source can name its texture without placing it (a Godot scene
+        # references res://<name>): the file sits beside the rig file.
+        sibling = Path(input_path).parent / Path(model.texture_path).name
+        if sibling.exists():
+            pages = [str(sibling)]
+    yield pages
+
+
+# SkelForm stores key times as integer frame indices, so a rig authored on
+# another time base moves its keys by up to half a frame and can even collapse
+# two nearby keys into one. 60 is the format's own default; a finer grid is
+# used only when it removes a collapse, because the residual shift of a few
+# milliseconds is not worth a dense editor timeline.
+SKELFORM_FPS = (60, 120, 240)
+
+
+def _skelform_timing(model) -> tuple[float, str | None]:
+    """Pick the frame rate and describe what it costs (``None`` if exact)."""
+    channels = [keys for tracks in model.animations.values()
+                for chans in tracks.values() for keys in chans.values()]
+    times = [k.time for keys in channels for k in keys]
+    if not times:
+        return float(SKELFORM_FPS[0]), None
+    best = None
+    for fps in SKELFORM_FPS:
+        collapses = 0
+        for keys in channels:
+            frames = [round(k.time * fps) for k in keys]
+            collapses += len(frames) - len(set(frames))
+        shift = max(abs(t - round(t * fps) / fps) for t in times)
+        score = (collapses, shift)
+        if best is None or score < best[0]:
+            best = (score, fps, collapses, shift)
+        if collapses == 0 and fps == SKELFORM_FPS[0]:
+            break
+    (_score, fps, collapses, shift) = best
+    if not collapses and shift < 1e-6:
+        return float(fps), None
+    note = (f"SkelForm stores integer frames: {fps} fps, "
+            f"{sum(1 for t in times if abs(t - round(t * fps) / fps) > 1e-6)} "
+            f"of {len(times)} key times land off the grid "
+            f"(worst {shift * 1000:.1f} ms)"
+            + (f" and {collapses} keys collapse into a neighbour"
+               if collapses else ""))
+    return float(fps), note
+
+
 def convert(input_path: str, source: str, target: str, out_dir: str,
             name: str | None = None, atlas: str | None = None,
             texture: str | None = None, godot_bin: str | None = None,
-            step: StepFn = print) -> ConvertResult:
+            fps: float | None = None, step: StepFn = print) -> ConvertResult:
     """Convert one rig file to a format bundle in ``out_dir``.
 
     - ``out_dir`` is a DIRECTORY: the output is a bundle, not a single file.
@@ -83,7 +169,7 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         atlas_path = _find_atlas(Path(input_path))
     model = (reader(input_path, atlas_path) if atlas_path
              else reader(input_path))
-    result.notes = list(model.notes)
+    result.notes = list(model.notes)   # printed again below, once steps restart
 
     step(f"destination: {out}")
     step(f"name: {name}")
@@ -100,37 +186,56 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         result.previewable = True
         step("writing Spine bundle (json + atlas + texture + viewer)")
         output = out / f"{name}.json"
-        image_path = out_spine.resolve_texture_path(model.texture_path,
-                                                    input_path)
-        image_name = (name + Path(image_path).suffix
-                      if image_path else "image.png")
-        out_spine.write_spine_json(model, str(output), image_name=image_name,
-                                   image_path=image_path)
-        if image_path and Path(image_path) != out / image_name:
-            shutil.copy2(image_path, out / image_name)
-        # Browser preview: index.html at the output root, the bundle in
-        # output/ — the shell fetches "output/<name>.json" with plain paths
-        # (no ../), so any static server pointed at the output root works.
-        bundle_dir = out / "output"
-        bundle_dir.mkdir(exist_ok=True)
-        for file_name in (output.name,
-                          output.with_suffix(".atlas").name, image_name):
-            source_file = (bundle_dir / file_name if (bundle_dir /
-                                                      file_name).exists()
-                           else out / file_name)
-            shutil.move(str(source_file), bundle_dir / file_name)
+        with _rig_pages(input_path, source, atlas_path, model) as pages:
+            if not pages:
+                result.notes.append(
+                    f"{source}: no page image found — the bundle is written "
+                    "without a texture, so a preview draws it untextured")
+            if pages:
+                model.texture_path = pages[0]
+                step(f"atlas page: {', '.join(Path(p).name for p in pages)}")
+                if len(pages) > 1:
+                    model.notes.append(
+                        f"{source}: multi-page atlas — the Spine leg writes "
+                        "one page, so attachments on the other pages sample "
+                        "the wrong pixels")
+            else:
+                model.notes.append(
+                    f"{source}: no atlas page found inside the input")
+            image_path = out_spine.resolve_texture_path(model.texture_path,
+                                                        input_path)
+            image_name = (name + Path(image_path).suffix
+                          if image_path else "image.png")
+            out_spine.write_spine_json(model, str(output), image_name=image_name,
+                                       image_path=image_path)
+            if image_path and Path(image_path) != out / image_name:
+                shutil.copy2(image_path, out / image_name)
+            # Browser preview: index.html at the output root, the bundle in
+            # output/ — the shell fetches "output/<name>.json" with plain paths
+            # (no ../), so any static server pointed at the output root works.
+            bundle_dir = out / "output"
+            bundle_dir.mkdir(exist_ok=True)
+            moved = []
+            for file_name in (output.name,
+                              output.with_suffix(".atlas").name, image_name):
+                source_file = (bundle_dir / file_name if (bundle_dir /
+                                                          file_name).exists()
+                               else out / file_name)
+                if not source_file.is_file():
+                    # A rig read without its page image has no texture to
+                    # ship; the JSON and the atlas still form a bundle, and
+                    # moving a file nobody wrote is a crash, not a warning.
+                    continue
+                shutil.move(str(source_file), bundle_dir / file_name)
+                moved.append(bundle_dir / file_name)
         moved_json = bundle_dir / output.name
         from . import viewer_out
         viewer_out.emit_viewer(str(out / "index.html"),
                                skeleton_json_path=str(moved_json),
                                skeleton_url=f"output/{output.name}",
                                atlas_url=f"output/{output.with_suffix('.atlas').name}")
-        result.files = [
-            out / "index.html",
-            moved_json,
-            bundle_dir / output.with_suffix(".atlas").name,
-            bundle_dir / image_name,
-        ]
+        result.files = [out / "index.html", moved_json] + [
+            path for path in moved if path.name != output.name]
         step(f"wrote index.html + output/{output.name}, "
              f"output/{output.with_suffix('.atlas').name}, output/{image_name}")
         step(f"{result.stats['bones']} bones, "
@@ -152,65 +257,94 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         step("next: load it in Godot and hand it to "
              "AnimationPlayer.add_animation_library — a .tres carries the "
              "animations, not the skeleton node graph")
+    elif target == "skelform":
+        step("writing SkelForm bundle (.skf: armature + embedded pages)")
+        artifacts = out / "output"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        output = artifacts / f"{name}.skf"
+        if fps is None:
+            fps, timing_note = _skelform_timing(model)
+            if timing_note:
+                result.notes.append(timing_note)
+        else:
+            timing_note = None
+        with _rig_pages(input_path, source, atlas_path, model) as pages:
+            registry.WRITERS["skelform"](model, str(output), fps=fps,
+                                         atlas_paths=pages)
+            page_count = len(pages)
+        # The browser shell plays the archive through SkelForm's own web
+        # runtime, so a SkelForm bundle is as previewable as a Spine one and
+        # a comparison pane can show the written .skf instead of a replay.
+        from . import skelform_viewer_out
+        skelform_viewer_out.emit_viewer(str(out / "index.html"),
+                                        f"output/{output.name}")
+        result.previewable = True
+        result.files = [out / "index.html", output]
+        # One visual per bone: an attachment the source drew can end up with no
+        # bone to hang off (extra slots sharing a bone, or alternatives). Count
+        # it from what was written, so the note matches the file.
+        drawn = _skelform_drawn_visuals(output)
+        if drawn is not None and drawn < len(model.attachments):
+            result.notes.append(
+                f"skelform: one visual per bone — {len(model.attachments) - drawn} "
+                f"of {len(model.attachments)} attachment(s) are in the archive but "
+                "no bone draws them")
+            step(result.notes[-1])
+        step(f"wrote output/{output.name} at {fps:g} fps"
+             + (f" with {page_count} embedded page(s)" if page_count else ""))
+        if timing_note:
+            step(timing_note)
+        step(f"{result.stats['bones']} bones, "
+             f"{result.stats['attachments']} attachments, "
+             f"{result.stats['animations']} animations")
+        step(f"web preview: {out / 'index.html'} (SkelForm's own web player)")
+        step("next: open it in the SkelForm editor, or serve the folder and "
+             "play it in the browser")
     else:
         step("writing Godot scene (.tscn + page image)")
         output = out / f"{name}.tscn"
-        # Spine→Godot: the atlas names the real page image. Resolve it the
-        # same way the reader does, instead of falling back to res://image.png
-        # — a scene referencing a texture that does not exist will not load.
-        image = in_spine.resolve_image_for_atlas(atlas_path, "")
-        # Multi-page atlas: every attachment carries its page; copy every
-        # page PNG beside the scene under its atlas name. The first page is
-        # re-stemmed (res://<name>.<ext>) like the single-page case.
-        rig_pages = sorted({a.page for a in model.attachments if a.page})
-        if texture:
-            texture_ref = texture
-        elif rig_pages:
-            first_page = Path(atlas_path).parent / rig_pages[0] \
-                if atlas_path else None
-            texture_ref = "res://" + (name + Path(rig_pages[0]).suffix)
-            image = str(first_page) if first_page and first_page.exists() \
-                else None
-        elif image:
-            texture_ref = "res://" + name + Path(image).suffix
-        else:
-            texture_ref = "res://image.png"
-        out_godot.write_godot_scene(model, str(output), texture_path=texture_ref)
-        # One stem for the whole bundle: the scene references
-        # res://<name>.<ext>, so the texture is copied under the bundle stem
-        # (the atlas may name the page differently, e.g. "custom assets.png"
-        # for an "animation" bundle). Multi-page rigs reference every page by
-        # its atlas name, so every page file is copied as-is.
-        texture_file = None
-        if image and not texture and Path(image).exists():
-            texture_file = name + Path(image).suffix
-            dest = out / texture_file
-            if Path(image).resolve() != dest.resolve():
-                shutil.copy2(image, dest)
-        # Extra atlas pages: copied by their own names — the scene references
-        # res://<page> for each.
-        page_files = []
-        if atlas_path and len(rig_pages) > 1:
-            for page in rig_pages[1:]:
-                source_file = Path(atlas_path).parent / page
-                if source_file.exists():
-                    shutil.copy2(source_file, out / page)
-                    page_files.append(out / page)
+        # The rig's first page is re-stemmed to the bundle name (the scene
+        # references res://<name>.<ext>); every further page keeps its own
+        # name, which is how the attachments reference it. A scene that
+        # points at a texture nobody copied does not load, so the pages are
+        # copied here, not merely referenced.
+        with _rig_pages(input_path, source, atlas_path, model) as pages:
+            if texture:
+                texture_ref = texture
+            elif pages:
+                texture_ref = "res://" + name + Path(pages[0]).suffix
+            else:
+                texture_ref = "res://image.png"
+            out_godot.write_godot_scene(model, str(output),
+                                        texture_path=texture_ref)
+            # The pages are copied while the resolver is still open (they may
+            # live in a scratch directory): the first under the bundle stem,
+            # every other under its own name, which is how the scene
+            # references it.
+            copied = []
+            if pages and not texture:
+                dest = out / (name + Path(pages[0]).suffix)
+                if Path(pages[0]).resolve() != dest.resolve():
+                    shutil.copy2(pages[0], dest)
+                copied.append(dest)
+            for page in pages[1:]:
+                dest = out / Path(page).name
+                if Path(page).resolve() != dest.resolve():
+                    shutil.copy2(page, dest)
+                copied.append(dest)
         # Artifacts live in output/ next to the browser shell; the web preview
         # build relocates them into its own project/output/.
         artifacts = out / "output"
         artifacts.mkdir(exist_ok=True)
         shutil.move(str(output), artifacts / output.name)
-        if texture_file and (out / texture_file).exists():
-            shutil.move(str(out / texture_file), artifacts / texture_file)
-        for page_file in page_files:
-            if (out / page_file.name).exists():
+        for page_file in copied:
+            if page_file.exists():
                 shutil.move(str(page_file), artifacts / page_file.name)
         result.files = [artifacts / output.name]
         result.texture = texture_ref
         wrote = f"output/{output.name}"
-        if not texture and image:
-            wrote += f", output/{name}{Path(image).suffix}"
+        if copied:
+            wrote += ", " + ", ".join(f"output/{c.name}" for c in copied)
         step(f"wrote {wrote}")
         step(f"texture: {texture_ref}")
         # A .tscn cannot render in a browser — but the real engine can. Ship a
@@ -264,36 +398,3 @@ def view(skeleton_json: str) -> Path:
         str(Path(skeleton_json).with_name("index.html")),
         skeleton_json_path=skeleton_json,
     ))
-
-
-def compare_page(godot_dir: str, spine_dir: str) -> Path:
-    """Write compare.html into the parent of both preview bundles (one HTML
-    page, typed panes with shared play/freeze controls); return its path.
-    Serve the parent folder with any static server."""
-    from .compare_out import emit_compare
-    return Path(emit_compare(Path(godot_dir), Path(spine_dir)))
-
-
-def spine_preview(skeleton_json: str, out_dir: str) -> Path:
-    """Pack a Spine rig (JSON + .atlas + page image) into ``out_dir`` and
-    emit a viewer index.html beside it; return the index.html path. The page
-    image is resolved from the atlas's first line — the atlas names it, the
-    JSON does not."""
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    src = Path(skeleton_json)
-    shutil.copy2(src, out / src.name)
-    atlas = _find_atlas(src)
-    if atlas:
-        atlas_path = Path(atlas)
-        # The viewer derives the atlas URL from the JSON's stem; a Git-hosted
-        # `.atlas.txt` is copied renamed so that URL resolves.
-        atlas_name = src.stem + ".atlas"
-        shutil.copy2(atlas_path, out / atlas_name)
-        # The atlas may hold several pages (page2, page3, ...): every line
-        # naming a .png that exists beside the atlas is a page to copy.
-        for line in atlas_path.read_text(encoding="utf-8").splitlines():
-            page = line.strip()
-            if page.endswith(".png") and (atlas_path.parent / page).exists():
-                shutil.copy2(atlas_path.parent / page, out / page)
-    return view(str(out / src.name))

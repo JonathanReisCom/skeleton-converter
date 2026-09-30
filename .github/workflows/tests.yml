@@ -30,17 +30,20 @@ jobs:
       - name: Run tests
         run: python3 -m pytest tests/ -v
 
-      # CLI end-to-end over a rig generated in code (tests/ci_rig.py), both
-      # directions. Everything lands in tmp/, which is gitignored. The Godot
+      # CLI end-to-end over a rig generated in code (tests/ci_rig.py), the
+      # wired directions: spine -> godot -> spine, and spine -> skelform ->
+      # godot (the SkelForm bundle carries its page inside the archive). Everything lands in tmp/, which is gitignored. The Godot
       # web preview is not a CI dependency: the CLI catches the missing engine
       # and prints "web preview unavailable" while still writing the scene
       # (src/bundle.py, godot_preview.ExportError).
-      - name: Convert both directions with the CLI
+      - name: Convert every wired direction with the CLI
         run: |
           python3 -m tests.ci_rig build tmp/ci
           python3 -m src.cli convert --from spine --to godot tmp/ci/rig.json -o tmp/ci/godot
           python3 -m src.cli convert --from godot --to spine tmp/ci/godot/output/rig.tscn -o tmp/ci/spine
-          python3 -m tests.ci_rig verify tmp/ci/godot tmp/ci/spine
+          python3 -m src.cli convert --from spine --to skelform tmp/ci/rig.json -o tmp/ci/skelform
+          python3 -m src.cli convert --from skelform --to godot tmp/ci/skelform/output/rig.skf -o tmp/ci/skelform-godot
+          python3 -m tests.ci_rig verify tmp/ci/godot tmp/ci/spine tmp/ci/skelform
 
       - name: Smoke-test the CLI
         run: |

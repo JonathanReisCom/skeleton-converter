@@ -78,12 +78,6 @@ def compose(position: tuple, rotation_deg: float, scale: tuple = (1.0, 1.0)) -> 
     )
 
 
-def mirror_matrix(matrix: tuple) -> tuple:
-    """F·M·F with F = diag(1,-1): flips input and output Y."""
-    a, b, c, d, tx, ty = matrix
-    return (a, -b, -c, d, tx, -ty)
-
-
 def mirror_point(point: tuple) -> tuple:
     return (point[0], -point[1])
 
@@ -142,6 +136,12 @@ class Bone:
     # survive the round trip. None means rest == node pose (Spine-authored
     # rigs, where the two coincide).
     rest: tuple | None = None
+    # Setup local solved for a target that cannot run constraints (Godot and
+    # SkelForm): (position, rotation_deg, scale) in THIS bone's own convention.
+    # None when the raw local is already what the source's setup pose shows.
+    # The Spine leg writes `position`/`rotation_deg` plus the constraints and
+    # must NOT use this, or the constraint would apply twice.
+    setup_solved: tuple | None = None
 
 
 @dataclass
@@ -155,10 +155,19 @@ class Attachment:
     name: str
     polygon: list
     uv: list
-    polygons: list  # triangle groups as index lists
+    # Triangle index groups (one per convex polygon; a triangle soup is stored
+    # as one group per triangle). Writers that want a flat list concatenate
+    # them, so no reader may hand over the source's raw soup.
+    polygons: list
     weights: list
     # Owning slot; empty means the name doubles as the slot (legacy 1:1).
     slot: str = ""
+    # True when the source drew this as a skinned mesh rather than a plain
+    # texture rectangle: a format may store a rectangle as "no vertices at
+    # all", so a quad that came from a mesh must not be collapsed back into
+    # one by a writer — the two are drawn differently once weights or path
+    # binds are involved.
+    mesh: bool = False
     position: tuple = (0.0, 0.0)  # Polygon2D node offset
     offset: tuple = (0.0, 0.0)    # Godot per-vertex offset property
     internal_vertices: int = 0
@@ -177,7 +186,18 @@ class Attachment:
     # file name as declared in the atlas). Empty means the default texture.
     # Multi-page rigs need per-page textures in Godot — one Polygon2D
     # texture cannot sample four pages.
+    # Degrees the atlas packed this region rotated (Spine's `rotate:`), 0 for
+    # the usual case. SkelForm's runtimes have no such flag and sample a rect
+    # linearly, so a writer has to rotate the uv itself; the model keeps the
+    # fact so every writer can.
+    uv_rotation: int = 0
     page: str = ""
+    # The setup worlds (per bone name) this reader used to bake the polygon
+    # out of the source's local vertices — the constraint-aware ones, NOT the
+    # plain FK of godot_world_transforms. The SkelForm writer inverts exactly
+    # these to state vertices in the bind bones' frame; recomputing them would
+    # invert the wrong matrix and rotate the whole rig.
+    bind_worlds: dict | None = None
 
 
 @dataclass
@@ -187,13 +207,15 @@ class Key:
     ``angle`` is a rotate-key value in degrees (Godot rotation_degrees);
     ``x``/``y`` are translate-key values in Godot units (Y-down). Exactly one
     of those value groups is meaningful depending on the owning track kind.
-    ``curve`` holds the spine-space bezier control points for the segment
-    starting at this key — ``[x1, y1, x2, y2]`` for rotate, ``[cx1, cy1,
-    cx2, cy2, cx3, cy3, cx4, cy4]`` for translate (time axis first, then one
-    value axis per Godot value axis; see ``bezier_table_point``). Spine space
-    is the curve's native space (CurveTimeline control points are absolute
-    time/value in spine offsets); each writer maps it to its own
-    interpolation value space.
+    ``curve`` holds the segment's bezier control points **in the same value
+    space as the key's own values** — absolute time, and a value component in
+    the units above. A single-value track (rotate) carries one quadruple
+    ``[t1, v1, t2, v2]``; a two-axis track (translate, scale) carries one
+    quadruple per value axis, ``[t1x, v1x, t2x, v2x, t1y, v1y, t2y, v2y]``
+    (see ``bezier_table_point``). ``"stepped"`` marks a held segment. Every
+    reader stores the curve in this space and every writer maps it through the
+    same affine transform it applies to the key values, so no format's
+    convention leaks into the rig.
     """
     time: float
     angle: float = 0.0
@@ -362,12 +384,6 @@ def bezier_table_point(curve: list, axis: int, step: int,
 
 
 
-def group_triangles(triangles: list) -> list:
-    return [
-        [triangles[i], triangles[i + 1], triangles[i + 2]]
-        for i in range(0, len(triangles) - 2, 3)
-    ]
-
 def godot_rest_worlds(model) -> dict:
     """bone name -> GLOBAL REST world in **standard convention** (a, b, c, d,
     tx, ty — the same order ``multiply``/``compose``/``mirror_world`` use).
@@ -400,20 +416,4 @@ def mirror_world(world: tuple) -> tuple:
     return (a, -b, -c, d, tx, -ty)
 
 
-
-def spine_inverse(kind: str, axis: str | None, bone: Skeleton):
-    """Godot track value -> spine offset: the inverse of each writer's affine
-    map. Curve control points live in the offset space of the raw JSON values,
-    which is what every writer maps through."""
-    if kind == "rotate":
-        # godot = rotation_deg - offset  (angle = -(setup_spine + offset))
-        return lambda v: bone.rotation_deg - v
-    if kind == "scale":
-        # Scale is 1:1 between the spaces: the Godot value IS the spine value.
-        return lambda v: v
-    if axis == "x":
-        # godot = offset + setup_x
-        return lambda v: v - bone.position[0]
-    # godot = -(offset + setup_y) = -offset + position[1]
-    return lambda v: bone.position[1] - v
 

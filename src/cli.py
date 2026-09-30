@@ -23,7 +23,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
         result = bundle.convert(args.input, args.from_format, args.to_format,
                                 args.output, name=args.name, atlas=args.atlas,
                                 texture=args.texture, godot_bin=args.godot,
-                                step=_step)
+                                fps=args.fps, step=_step)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -68,6 +68,10 @@ def main() -> int:
                                 help=".atlas beside the input JSON (Spine→Godot)")
     convert_parser.add_argument("--texture", default=None,
                                 help="texture path the Godot scene references")
+    convert_parser.add_argument("--fps", type=float, default=None,
+                                help="frame rate for a frame-based target "
+                                     "(SkelForm); default picks one that fits "
+                                     "the rig's key times")
     convert_parser.add_argument("--godot", default=None,
                                 help="Godot binary for the web preview "
                                      "(default: GODOT_BIN env or the macOS app)")

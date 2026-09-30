@@ -114,22 +114,23 @@ def test_bezier_curves_survive_the_godot_leg(tmp_path):
     The .tscn leg once flattened every bezier to linear (interp = 1), so a
     round trip silently lost 189 curve keys on the hero. The writer now emits
     TYPE_BEZIER tracks (points = [value, in_t, in_v, out_t, out_v] per key,
-    handles offset from their key) and the reader rebuilds the spine-space
-    curve from them. Control points live in the raw JSON's offset space, which
-    is what every writer maps through — rot/y negate, x does not.
+    handles offset from their key) and the reader rebuilds the curve from
+    them. Control points live in the key's own value space, so the spine leg
+    maps them through the same transform as the key values (rot and y negate,
+    x shifts by the setup position).
     """
     model = _rig()
+    rotate_curve = [0.15, 5.0, 0.35, 25.0]
+    translate_curve = [0.15, 5.0, 0.35, 25.0, 0.2, -1.0, 0.4, -3.0]
     model.animations = {
         "a": {"arm": {
-            # rotate: curve control points are absolute spine offsets.
             "rotate": [
-                Key(time=0.0, angle=-10.0, curve=[0.15, 5.0, 0.35, 25.0]),
+                Key(time=0.0, angle=-10.0, curve=rotate_curve),
                 Key(time=1.0, angle=-40.0),
             ],
-            # translate: 8-float curve = [x1,y1,x2,y2] per segment.
+            # translate: one quadruple per axis ([x1,y1,x2,y2] twice).
             "translate": [
-                Key(time=0.0, x=10.0, y=0.0,
-                    curve=[0.15, 5.0, 0.35, 25.0, 0.2, -1.0, 0.4, -3.0]),
+                Key(time=0.0, x=10.0, y=0.0, curve=translate_curve),
                 Key(time=1.0, x=40.0, y=-30.0),
             ],
         }},
@@ -150,12 +151,17 @@ def test_bezier_curves_survive_the_godot_leg(tmp_path):
     # write_spine_json emits offsets (value - setup), the input model carried
     # absolute model-space angles, so compare against the offsets instead.
     assert math.isclose(back["rotate"][0]["value"], 40.0, abs_tol=1e-6), back["rotate"][0]
+    setup = reloaded.by_name["arm"]
     got = back["rotate"][0]["curve"]
-    want = model.animations["a"]["arm"]["rotate"][0].curve
+    want = [rotate_curve[0], setup.rotation_deg - rotate_curve[1],
+            rotate_curve[2], setup.rotation_deg - rotate_curve[3]]
     assert all(math.isclose(x, y, abs_tol=1e-6) for x, y in zip(want, got)), \
         f"rotate curve changed: {want} -> {got}"
     got = back["translate"][0]["curve"]
-    want = model.animations["a"]["arm"]["translate"][0].curve
+    want = [translate_curve[0], translate_curve[1] - setup.position[0],
+            translate_curve[2], translate_curve[3] - setup.position[0],
+            translate_curve[4], setup.position[1] - translate_curve[5],
+            translate_curve[6], setup.position[1] - translate_curve[7]]
     assert len(got) == 8 and all(
         math.isclose(x, y, abs_tol=1e-6) for x, y in zip(want, got)
     ), f"translate curve changed: {want} -> {got}"
@@ -172,8 +178,9 @@ def test_skinned_polygon_format_matches_what_godot_renders(tmp_path):
     exporting the hero and diffing screenshots:
     - bone refs are NodePaths relative to the Skeleton2D ("root/hip/..."),
       like the official demo's "Hip/Chest", not bare leaf names;
-    - each spine triangle is its own `polygons` group, because Godot
-      fan-triangulates a group from its first index.
+    - every triangle is its own `polygons` group, because Godot
+      fan-triangulates a group from its first index (the rig stores groups,
+      so a reader must not pass the source's flat soup through).
     """
     model = _rig()
     # Weighted mesh: 4 verts, one influencing bone with weight 1.
@@ -181,7 +188,7 @@ def test_skinned_polygon_format_matches_what_godot_renders(tmp_path):
         name="plate",
         polygon=[(10.0, 0.0), (20.0, 0.0), (20.0, 10.0), (10.0, 10.0)],
         uv=[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
-        polygons=[0, 1, 2, 0, 2, 3],
+        polygons=[[0, 1, 2], [0, 2, 3]],
         weights=[("arm", [1.0, 1.0, 1.0, 1.0])],
     ))
     scene = tmp_path / "rig.tscn"

@@ -7,7 +7,8 @@
   :root {
     --bg: #16181f; --surface: #22252e; --border: #343946;
     --text: #e8eaf0; --muted: #9aa3b5;
-    --godot: #478cbf; --spine: #f4801f; --freeze: #e6a23c;
+    --godot: #478cbf; --spine: #f4801f; --skelform: #8f7ee7;
+    --freeze: #e6a23c;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
   }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -46,14 +47,18 @@
   .pane .tag i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .pane[data-kind="godot"] .tag i { background: var(--godot); }
   .pane[data-kind="spine"] .tag i { background: var(--spine); }
+  .pane[data-kind="skelform"] .tag i { background: var(--skelform); }
   .pane[data-kind="godot"] .tag span { color: #8db8d8; }
   .pane[data-kind="spine"] .tag span { color: #f0b27a; }
+  .pane[data-kind="skelform"] .tag span { color: #b9aef2; }
   .pane[data-kind="godot"] .tag span::after { content: " · Godot 4.7"; }
   .pane[data-kind="spine"] .tag span::after { content: " · Spine 4.2"; }
+  .pane[data-kind="skelform"] .tag span::after { content: " · SkelForm web"; }
+  .pane[data-failed="1"] .tag span::after { content: " · not loaded"; }
   iframe { position: absolute; inset: 0; width: 100%; height: 100%;
            border: 0; background: transparent; }
-  /* Alignment grid: identical spacing over both panes, so a feature at the
-     same screen position in both panes sits on the same line. */
+  /* Alignment grid: identical spacing over every pane, so a feature at the
+     same screen position in any two panes sits on the same line. */
   .grid {
     position: absolute; inset: 0; pointer-events: none; z-index: 1;
     background-image:
@@ -134,15 +139,27 @@ function whenLoaded(iframe, test, attempt) {
     () => whenLoaded(iframe, test, attempt + 1));
 }
 
+// A pane that failed to load counts as ready: it will never publish its
+// handles, and a shell still waiting for them shows "loading…" forever while
+// the rig on the other side looks broken.
 const ready = frames.map(f =>
   f.kind === "spine"
-    ? whenLoaded(f.iframe, w => w.__state && w.__skeleton)
-    : whenLoaded(f.iframe, w => typeof w.previewPlay === "function"));
+    ? whenLoaded(f.iframe, w => w.__loadError || (w.__state && w.__skeleton))
+    : whenLoaded(f.iframe, w => w.__loadError
+        || typeof w.previewPlay === "function"));
 let paneReady = [];  // resolved pane windows, aligned with frames
 
-function godotAnimNames(pane) {
-  // The Godot wrapper builds its own track buttons from window.previewAnims;
-  // read the names back from its DOM (same origin).
+// A pane whose assets 404'd loads, animates and never textures; it is alive
+// but has no handles to drive, so every control has to step around it.
+function paneAlive(i) {
+  const w = paneReady[i];
+  return !!w && !w.__loadError;
+}
+
+function paneAnimNames(pane) {
+  // A Godot wrapper builds its track buttons from window.previewAnims and a
+  // SkelForm pane builds them from the archive's animations; either way the
+  // names are readable from its DOM (same origin).
   try {
     const names = [...pane.iframe.contentDocument
       .querySelectorAll("button")].map(b => b.textContent);
@@ -154,11 +171,24 @@ Promise.all(ready).then((ws) => {
   paneReady = ws;
   const spineFrame = frames.find(f => f.kind === "spine");
   let names = null;
-  if (spineFrame) {
+  // A failed pane reports itself in the pane header, and its animation names
+  // (if any) come from the DOM like everywhere else, so the shell still works.
+  frames.forEach((f, i) => {
+    if (paneReady[i] && paneReady[i].__loadError) {
+      f.iframe.closest(".pane").dataset.failed = "1";
+      f.iframe.closest(".pane").title = String(paneReady[i].__loadError);
+    }
+  });
+  if (spineFrame && paneAlive(frames.indexOf(spineFrame))) {
     const w = paneReady[frames.indexOf(spineFrame)];
     names = w.__skeleton.data.animations.map(a => a.name);
-  } else {
-    names = godotAnimNames(frames[0]);
+  }
+  if (!names) {
+    for (let i = 0; i < frames.length; i += 1) {
+      if (!paneAlive(i)) continue;
+      names = paneAnimNames(frames[i]);
+      if (names) break;
+    }
   }
   if (!names) { tracksBox.textContent = "(waiting for animation names)"; return; }
   tracksBox.textContent = "";
@@ -195,7 +225,10 @@ function clearActive() {
 let masterClock = null;   // { name, start }
 function seekAll(name, t) {
   frames.forEach((f, i) => {
-    if (f.kind === "godot") paneReady[i].previewFreeze(name, t);
+    if (!paneAlive(i)) return;  // a pane with no handles cannot be seeked
+    // Godot and SkelForm panes both take (animation, seconds) directly; the
+    // Spine pane is driven through its own AnimationState.
+    if (f.kind === "godot" || f.kind === "skelform") paneReady[i].previewFreeze(name, t);
     else freezeSpineAt(name, t, paneReady[i].__state, paneReady[i].__skeleton);
   });
 }
@@ -217,6 +250,7 @@ function play(name, button) {
   // disabled or poses blend across the switch.
   frames.forEach((f, i) => {
     if (f.kind === "spine") {
+      if (!paneAlive(i)) return;
       const state = paneReady[i].__state;
       state.data.defaultMix = 0;
       const entry = state.setAnimation(0, name, true);

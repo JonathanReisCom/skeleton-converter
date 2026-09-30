@@ -25,8 +25,6 @@ from __future__ import annotations
 
 import math
 
-from .model import spine_world_transforms
-
 # ---------------------------------------------------------------------------
 # Math helpers mirroring the runtime's MathUtils
 # ---------------------------------------------------------------------------
@@ -35,10 +33,6 @@ RAD_DEG = 180.0 / math.pi
 DEG_RAD = math.pi / 180.0
 PI = math.pi
 PI2 = math.pi * 2
-
-
-def _signum(value: float) -> float:
-    return 1.0 if value > 0 else (-1.0 if value < 0 else 0.0)
 
 
 def _acos(value: float) -> float:
@@ -206,6 +200,35 @@ class BoneState:
             self.arotation = 0.0
 
 
+def active_bones(spine: dict, skin: str | None = None) -> set:
+    """Bone names the runtime leaves ACTIVE under ``skin``.
+
+    A port of ``Skeleton.updateCache``: every bone flagged ``skin: true``
+    (Spine's skinRequired) starts inactive, then each bone the ACTIVE skin lists
+    is activated along with all of its ancestors. A slot on an inactive bone
+    draws nothing — the runtime's ``getBounds`` skips it and so does the draw
+    loop — so the hero's ``chain*`` bones, declared by the
+    ``weapon/morningstar`` skin alone, are inactive under ``default`` and the
+    chain the JSON and atlas still describe must not be rendered.
+
+    ``skin`` defaults to the rig's first skin, the runtime's usual setup.
+    """
+    data = {bone["name"]: bone for bone in spine.get("bones", [])}
+    skins = spine.get("skins", []) or []
+    if skin is None:
+        skin = skins[0].get("name") if skins and isinstance(skins[0], dict) else None
+    active = {name for name, bone in data.items() if not bone.get("skin")}
+    for entry in skins:
+        if not isinstance(entry, dict) or entry.get("name") != skin:
+            continue
+        for listed in entry.get("bones") or []:
+            name = listed.get("name") if isinstance(listed, dict) else listed
+            while name:
+                active.add(name)
+                name = data.get(name, {}).get("parent")
+    return active
+
+
 class ConstraintSolver:
     """Applies IK and path constraints in the runtime's own order."""
 
@@ -237,6 +260,7 @@ class ConstraintSolver:
             "physics": [b["name"] for b in spine["bones"] if b.get("physics")],
         }
         self._order = self._constraint_order()
+        self._active_cache: set | None = None
 
     # -- ordering (port of Skeleton.updateCache) ---------------------------
 
@@ -307,18 +331,13 @@ class ConstraintSolver:
     def _bone_active(self, state: BoneState) -> bool:
         """Whether the runtime considers this bone active under the skin.
 
-        A bone with ``skin: true`` is deactivated unless the active skin (or a
-        skin it inherits from) lists it. Inactive bones are not transformed at
-        all, so the hero's chain bones read ``(0, 0)`` under the ``default``
-        skin while the morningstar weapon is not equipped.
+        Inactive bones are not transformed at all, so the hero's chain bones
+        read ``(0, 0)`` under the ``default`` skin while the morningstar weapon
+        is not equipped. The rule lives in ``active_bones``; see Skeleton.updateCache.
         """
-        if not state.data.get("skin", False):
-            return True
-        for skin in self.spine.get("skins", []) or []:
-            if not isinstance(skin, dict) or skin.get("name") != self.skin:
-                continue
-            return state.name in (skin.get("bones") or [])
-        return False
+        if self._active_cache is None:
+            self._active_cache = active_bones(self.spine, self.skin)
+        return state.name in self._active_cache
 
     def _is_active(self, constraint: dict) -> bool:
         """Whether the runtime would run this constraint for the active skin.
@@ -1026,17 +1045,6 @@ class ConstraintSolver:
         out[o + 2] = math.atan2(dy, dx)
 
 
-def bake_constraints(spine: dict) -> dict:
-    """Bone name -> (x, y, rotation_deg) with IK and path constraints applied.
-
-    Returns the constrained local pose in Spine space, ready to be written as
-    animation keys. Bones the constraints do not touch keep their setup values.
-    """
-    solver = ConstraintSolver(spine)
-    solver.apply()
-    return solver.local_poses()
-
-
 def _sample_pose(animation: dict, time: float, bones: dict) -> dict:
     """Local (x, y, rotation) for every bone at ``time``.
 
@@ -1120,6 +1128,39 @@ def _bezier_table(curve: list, axis: int, step: int, time1: float,
     return (time_point[0], value_point[1])
 
 
+def resolved_setup_bones(spine: dict) -> set:
+    """Bones whose SETUP local must be solved, not read from the JSON.
+
+    A constraint moves its own bones and everything hanging off them, and the
+    source runtime solves those on EVERY ``updateWorldTransform`` — including
+    the setup pose a viewer frames and a static scene shows. Godot and SkelForm
+    have no constraints, so the local has to be solved at read time or the
+    standing rig differs from the source (the hero's ``thigh1`` sat 8.4 degrees
+    off, which was the last percent of the framing difference between the panes).
+
+    Bones that do not inherit their parent's rotation belong to the same set:
+    their JSON ``rotation`` is a world angle, not a local one.
+    """
+    children: dict[str, list] = {}
+    for bone in spine.get("bones", []):
+        parent = bone.get("parent")
+        if parent:
+            children.setdefault(parent, []).append(bone["name"])
+    moved = set()
+    stack = [name
+             for constraint in (spine.get("ik") or []) + (spine.get("path") or [])
+             for name in (constraint.get("bones") or [])]
+    while stack:
+        name = stack.pop()
+        if name in moved:
+            continue
+        moved.add(name)
+        stack.extend(children.get(name, []))
+    moved.update(bone["name"] for bone in spine.get("bones", [])
+                 if bone.get("inherit", "normal") != "normal")
+    return moved
+
+
 def bake_animation(spine: dict, animation_name: str, skin: str | None = None) -> dict:
     """Bone name -> {rotate: [...], translate: [...]} with constraints baked.
 
@@ -1134,26 +1175,15 @@ def bake_animation(spine: dict, animation_name: str, skin: str | None = None) ->
         return {}
 
     setup_bones = {b["name"]: b for b in spine["bones"]}
-    children: dict[str, list] = {}
-    for bone in spine["bones"]:
-        parent = bone.get("parent")
-        if parent:
-            children.setdefault(parent, []).append(bone["name"])
+    # The subset of `affected` whose local is not a local at all: their source
+    # world is read back with `update_applied_transform` below.
+    reorthogonal = {name for name, bone in setup_bones.items()
+                    if bone.get("inherit", "normal") != "normal"}
 
-    constrained = set()
-    for constraint in (spine.get("ik") or []) + (spine.get("path") or []):
-        constrained.update(constraint.get("bones") or [])
-
-    # A constraint moves its own bones and everything hanging off them.
-    affected = set()
-    stack = list(constrained)
-    while stack:
-        name = stack.pop()
-        if name in affected:
-            continue
-        affected.add(name)
-        stack.extend(children.get(name, []))
-
+    # A constraint moves its own bones and everything hanging off them, and a
+    # bone that ignores its parent's rotation needs its local re-solved even
+    # when nothing constrains it — see `resolved_setup_bones`.
+    affected = resolved_setup_bones(spine)
     if not affected:
         return {}
 
@@ -1192,6 +1222,14 @@ def bake_animation(spine: dict, animation_name: str, skin: str | None = None) ->
                 inactive.add(name)
                 continue
             setup = setup_bones.get(name) or {}
+            if name in reorthogonal:
+                # Read the local back out of the WORLD the source produced, the
+                # same way the reader solves the setup pose: under normal
+                # inheritance the runtime will add the parent's rotation, and
+                # that is exactly what this bone's source world excludes. This
+                # runs once the whole solve is done and feeds nothing back, so
+                # it cannot undo a path constraint's placement.
+                state.update_applied_transform()
             # Emit offsets from setup, which is what Spine keys carry.
             samples[name]["rotate"].append(
                 {"time": time, "value": state.arotation - setup.get("rotation", 0.0)}

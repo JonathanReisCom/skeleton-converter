@@ -9,7 +9,7 @@ page image) entirely in code, and is shared by two consumers:
   gate;
 - ``.github/workflows/tests.yml`` — the CLI end-to-end step, through
   ``python3 -m tests.ci_rig build <dir>`` and
-  ``python3 -m tests.ci_rig verify <godot-dir> <spine-dir>``.
+  ``python3 -m tests.ci_rig verify <godot-dir> <spine-dir> <skelform-dir>``.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import struct
 import sys
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -138,8 +139,12 @@ def write_spine_export(directory: Path) -> Path:
     return json_path
 
 
-def verify(godot_dir: Path, spine_dir: Path) -> int:
-    """The CLI end-to-end contract: both directions wrote their bundle."""
+def verify(godot_dir: Path, spine_dir: Path, skelform_dir: Path) -> int:
+    """The CLI end-to-end contract: every wired direction wrote its bundle.
+
+    A SkelForm bundle is one archive, so it is checked by opening it: the
+    armature and the rig's page must both be inside.
+    """
     expected = [
         godot_dir / "output" / f"{STEM}.tscn",
         godot_dir / "output" / PAGE,
@@ -149,11 +154,25 @@ def verify(godot_dir: Path, spine_dir: Path) -> int:
         spine_dir / "output" / PAGE,
     ]
     missing = [str(path) for path in expected if not path.is_file()]
+    bundle = skelform_dir / "output" / f"{STEM}.skf"
+    members = []
+    if bundle.is_file():
+        with zipfile.ZipFile(bundle) as archive:
+            members = archive.namelist()
+        # The writer embeds pages under the runtime's own names — `atlas0.png`,
+        # `atlas1.png` — not the source file's (`PAGE`), which is why the
+        # member is spelled out here instead of reusing it.
+        for member in ("armature.json", "readme.md", "atlas0.png"):
+            if member not in members:
+                missing.append(f"{bundle}:{member}")
+    else:
+        missing.append(str(bundle))
     if missing:
         print("missing conversion artifacts: " + ", ".join(missing),
               file=sys.stderr)
         return 1
-    print("CLI artifacts: " + ", ".join(str(path) for path in expected))
+    print("CLI artifacts: " + ", ".join(str(path) for path in expected)
+          + f" | {bundle} -> {', '.join(members)}")
     return 0
 
 
@@ -161,10 +180,10 @@ def main(argv: list) -> int:
     if len(argv) >= 3 and argv[1] == "build":
         print(write_spine_export(Path(argv[2])))
         return 0
-    if len(argv) >= 4 and argv[1] == "verify":
-        return verify(Path(argv[2]), Path(argv[3]))
+    if len(argv) >= 5 and argv[1] == "verify":
+        return verify(Path(argv[2]), Path(argv[3]), Path(argv[4]))
     print("usage: python3 -m tests.ci_rig build <dir> | "
-          "verify <godot-dir> <spine-dir>", file=sys.stderr)
+          "verify <godot-dir> <spine-dir> <skelform-dir>", file=sys.stderr)
     return 2
 
 

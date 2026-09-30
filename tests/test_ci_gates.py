@@ -17,18 +17,21 @@ Tolerance is the project's: < 0.01 units on every bone and vertex (AGENTS.md,
 
 from __future__ import annotations
 
+import json
 import math
+import zipfile
 from pathlib import Path
 
-import pytest
-
+from src import bundle
 from src.in_godot import read_godot_skeleton
+from src.in_skelform import read_skeleton as read_skelform
 from src.in_spine import read_skeleton
+from tests.ci_rig import PAGE_SIZE
 from src.mesh_parity import mesh_parity
 from src.model import godot_world_transforms
 from src.out_godot import write_godot_scene
 from src.out_spine import write_spine_json
-from tests.ci_rig import PAGE, STEM, write_spine_export
+from tests.ci_rig import PAGE, STEM, atlas_text, write_spine_export
 
 TOLERANCE = 1e-2
 
@@ -88,13 +91,17 @@ def _animation_values(model) -> dict:
 
 
 def _worst_bone(source, reloaded) -> float:
-    """Worst absolute difference across every world matrix entry."""
+    """Worst absolute difference across every world matrix entry.
+
+    Compares over the SOURCE's bones: the writer may emit extra child bones
+    for stacked attachments (eyes, capes), which have no source counterpart.
+    """
     first = godot_world_transforms(source)
     second = godot_world_transforms(reloaded)
-    assert set(first) == set(second), sorted(set(first) ^ set(second))
+    assert set(source_names := [b.name for b in source.bones]) <= set(second)
     return max(
         abs(first[name][index] - second[name][index])
-        for name in first for index in range(6)
+        for name in source_names for index in range(6)
     )
 
 
@@ -124,6 +131,230 @@ def _assert_same_animations(source, reloaded) -> None:
             else:
                 assert math.isclose(value, other_value, abs_tol=TOLERANCE), \
                     (key, value, other_value)
+
+
+def test_skelform_bone_draws_the_equipped_attachment(tmp_path):
+    """The one visual a bone points at is the attachment the source DRAWS.
+
+    A bone carries a single ``visuals_id`` and the Hidden keys toggle that
+    bone, so pointing it at a slot's *first* alternative hides the rig
+    whenever the source equips a different one — Spine lists alternatives
+    freely and often equips a later entry. The fixture flips the source so the
+    equipped attachment is the second, which is the case that failed.
+    """
+    json_path = write_spine_export(tmp_path)
+    rig = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    rig["slots"][0]["attachment"] = "torso-belt"        # not the first entry
+    Path(json_path).write_text(json.dumps(rig), encoding="utf-8")
+
+    out = tmp_path / "flipped"
+    bundle.convert(str(json_path), "spine", "skelform", str(out), name=STEM,
+                   step=lambda _line: None)
+    with zipfile.ZipFile(out / "output" / f"{STEM}.skf") as archive:
+        armature = json.loads(archive.read("armature.json"))
+    bone = next(b for b in armature["bones"] if b["name"] == "torso")
+    visual = armature["visuals"][bone["visuals_id"]]
+    assert visual["tex"] == "torso-belt", visual
+    assert bone["hidden"] is False, bone
+
+
+def test_bundle_without_a_page_image_is_still_a_bundle(tmp_path):
+    """A rig read without its page must not crash the Spine target.
+
+    The writer names a placeholder page when no image is found; the bundle
+    step then moved a file nobody wrote (FileNotFoundError) — an upload
+    without the page is an ordinary case, so the bundle is written and every
+    file it reports must exist.
+    """
+    json_path = write_spine_export(tmp_path)
+    (tmp_path / PAGE).unlink()          # the rig arrives without its page
+    out = tmp_path / "bundle"
+    result = bundle.convert(str(json_path), "spine", "spine", str(out),
+                            name=STEM, step=lambda _line: None)
+
+    assert (out / "output" / f"{STEM}.json").is_file()
+    assert (out / "output" / f"{STEM}.atlas").is_file()
+    assert any("no page image" in note for note in result.notes), result.notes
+    missing = [str(path) for path in result.files if not path.exists()]
+    assert not missing, missing
+
+
+def test_rotated_atlas_region_reaches_the_vertex_uv(tmp_path):
+    """A `rotate: 90` region's uv must survive the page rewrite.
+
+    Spine's atlas packs a region a quarter turn off and its runtime spins the
+    sprite back while sampling. SkelForm's runtimes have no such flag, so the
+    writer turns the PIXELS upright instead (`png.rotate_quarter`, clockwise
+    false: a source pixel (column, row) lands at (row, W-1-column)) and the uv
+    has to follow — a vertex that sampled (a, b) of the packed rect samples
+    (b, 1 - a) of the sprite's own rect.
+
+    The fixture declares the mesh's region rotated in the atlas. Its normalized
+    source corners are (0, 1), (0, 0), (1, 0), (1, 1), so the vertices must
+    sample (1, 1), (0, 1), (0, 0), (1, 0). Recomputing the uv from the written
+    geometry instead (which is what made unwrapped sprites draw squeezed and
+    off their own rect) ends up a quarter turn from this.
+    """
+    json_path = write_spine_export(tmp_path)
+    lines = atlas_text().splitlines()
+    patched = []
+    for line in lines:
+        patched.append(line)
+        if line.startswith("bounds:") and patched[-2] == "arm-glove":
+            patched.append("rotate: 90")
+    (tmp_path / f"{STEM}.atlas").write_text("\n".join(patched) + "\n",
+                                            encoding="utf-8")
+
+    out = tmp_path / "rotated"
+    bundle.convert(str(json_path), "spine", "skelform", str(out), name=STEM,
+                   step=lambda _line: None)
+    with zipfile.ZipFile(out / "output" / f"{STEM}.skf") as archive:
+        armature = json.loads(archive.read("armature.json"))
+    visual = next(v for v in armature["visuals"] if v["tex"] == "arm-glove")
+    assert [(round(vert["uv"]["x"], 6), round(vert["uv"]["y"], 6))
+            for vert in visual["vertices"]] == \
+        [(1.0, 1.0), (0.0, 1.0), (0.0, 0.0), (1.0, 0.0)], visual["vertices"]
+
+
+def test_a_rotated_region_is_written_with_its_faces(tmp_path):
+    """A region quad the writer cannot draw as a texture rect needs triangles.
+
+    SkelForm's region draw is axis-aligned against the bone and ignores the
+    attachment's own `rotation`, so any region quad that is not a multiple of
+    90 has to travel as geometry — and a Spine region attachment carries no
+    `triangles` key (only meshes do). Emitting the four vertices without their
+    two triangles produces a visual the runtime never rasterizes: the hero's
+    arms, hands, legs and feet were all silently invisible, and the rig drew a
+    head and a cape over nothing.
+
+    The fixture's `torso-belt` is a region rotated 15 degrees, which is exactly
+    that case. Every visual with vertices must carry faces.
+    """
+    json_path = write_spine_export(tmp_path)
+    out = tmp_path / "quads"
+    bundle.convert(str(json_path), "spine", "skelform", str(out), name=STEM,
+                   step=lambda _line: None)
+    with zipfile.ZipFile(out / "output" / f"{STEM}.skf") as archive:
+        armature = json.loads(archive.read("armature.json"))
+    faceless = [visual["tex"] for visual in armature["visuals"]
+                if visual.get("vertices") and not visual.get("indices")]
+    assert not faceless, f"visuals with vertices and no faces: {faceless}"
+
+
+def test_a_region_quad_pairs_its_uv_with_the_right_corner(tmp_path):
+    """Corner 0 of the quad samples the rect's BOTTOM-left, not its top-left.
+
+    The runtime samples a region rect by walking its uv corners in the same
+    order the geometry does (`RegionAttachment.updateRegion`: for `degrees` 0
+    the first offset is `(localX, localY)` and its uv is `(u, v2)`, the rect's
+    left/bottom). Pairing them one step off flips v, and every region the
+    writer has to draw as geometry comes out upside down — the hero's hands,
+    feet and limbs were all mirrored while the meshes beside them were right.
+    """
+    json_path = write_spine_export(tmp_path)
+    out = tmp_path / "corners"
+    bundle.convert(str(json_path), "spine", "skelform", str(out), name=STEM,
+                   step=lambda _line: None)
+    with zipfile.ZipFile(out / "output" / f"{STEM}.skf") as archive:
+        armature = json.loads(archive.read("armature.json"))
+    visual = next(v for v in armature["visuals"] if v["tex"] == "torso-base")
+    assert [(round(vert["uv"]["x"], 6), round(vert["uv"]["y"], 6))
+            for vert in visual["vertices"]] == \
+        [(0.0, 1.0), (0.0, 0.0), (1.0, 0.0), (1.0, 1.0)], visual["vertices"]
+
+
+def test_a_slot_the_setup_pose_does_not_draw_starts_hidden(tmp_path):
+    """The file's `hidden` is the SETUP pose's answer, not the animation's.
+
+    A slot draws its setup attachment and nothing else until an attachment
+    timeline equips another entry. The fixture's `arm` slot does exactly that:
+    setup is `arm-base` and the idle animation equips `arm-glove`. Flagging
+    every entry any animation ever equips as visible made the setup pose draw
+    the glove — art the source leaves out, and a bigger framing box, which is
+    why the two panes of the comparison never lined up.
+    """
+    json_path = write_spine_export(tmp_path)
+    out = tmp_path / "hidden"
+    bundle.convert(str(json_path), "spine", "skelform", str(out), name=STEM,
+                   step=lambda _line: None)
+    with zipfile.ZipFile(out / "output" / f"{STEM}.skf") as archive:
+        armature = json.loads(archive.read("armature.json"))
+    drawn = {bone.get("tex"): bone for bone in armature["bones"]
+             if bone.get("tex")}
+    assert drawn["arm-glove"]["hidden"] is True, drawn["arm-glove"]
+    assert drawn["arm-glove"]["init_hidden"] is True, drawn["arm-glove"]
+    assert drawn["arm-base"]["hidden"] is False, drawn["arm-base"]
+
+
+def test_skelform_target_carries_the_rig_and_its_page(tmp_path):
+    """Every wired direction that writes a bundle writes a loadable one.
+
+    The SkelForm target is one archive, so besides the numeric round trip this
+    asserts what makes the file loadable at all: the armature and the rig's
+    page inside it. The page is found two different ways — beside the atlas
+    for a Spine source, beside the scene for a Godot one — and a target that
+    merely references a page without copying it produces a scene Godot cannot
+    texture, so the Godot leg checks its own copy too.
+    """
+    source = _spine_model(tmp_path)
+    out = tmp_path / "bundle"
+    bundle.convert(str(tmp_path / f"{STEM}.json"), "spine", "skelform",
+                   str(out), name=STEM)
+    written = out / "output" / f"{STEM}.skf"
+    with zipfile.ZipFile(written) as archive:
+        members = archive.namelist()
+        assert {"armature.json", "readme.md"} <= set(members)
+        # SkelForm's runtimes find pages by looking for "atlas" in the member
+        # name (its web player loads only those), so a page embedded under the
+        # rig's own name is invisible to them and the rig draws untextured.
+        pages = [name for name in members if name.endswith(".png")]
+        assert pages and all("atlas" in name for name in pages), members
+        armature = json.loads(archive.read("armature.json"))
+        atlases = armature["atlases"]
+        # Every visual carries the pivot fields, region or mesh: SkelForm's
+        # players read them while drawing, and a region has no geometry to
+        # hint that it needs one (its absence stopped the player's draw loop).
+        for visual in armature["visuals"]:
+            for field in ("pivot_pos", "pivot_rot", "pivot_scale", "init_tex"):
+                assert field in visual, (field, visual)
+        assert [a["filename"] for a in atlases] == pages, atlases
+
+    # The bundle is playable: SkelForm's own web player, pinned by commit.
+    shell = (out / "index.html").read_text(encoding="utf-8")
+    assert f"output/{STEM}.skf" in shell
+    assert "skelform-js@" in shell and "skelform-web-player@" in shell
+
+    reloaded = read_skelform(str(written))
+    # The writer may append child bones for stacked attachments (more visuals
+    # than bones): the SOURCE's bones must all survive, in order, first; the
+    # extras are the emitted helper bones.
+    reloaded_names = [b.name for b in reloaded.bones]
+    assert reloaded_names[:len(source.bones)] == [b.name for b in source.bones]
+    assert _worst_bone(source, reloaded) < TOLERANCE
+    _assert_same_animations(source, reloaded)
+    # UVs are atlas pixels in this format: one outside the page means the
+    # page or the atlas metadata the reader used is wrong.
+    width, height = PAGE_SIZE
+    for attachment in reloaded.attachments:
+        for u, v in attachment.uv:
+            assert 0.0 <= u <= width and 0.0 <= v <= height, \
+                (attachment.name, u, v, PAGE_SIZE)
+
+    # Godot source: the page lives beside the scene, and the scene the .skf
+    # came from must get its own copy.
+    _, scene_model = _godot_model(tmp_path)
+    scene_out = tmp_path / "scene-bundle"
+    bundle.convert(str(tmp_path / f"{STEM}.tscn"), "godot", "skelform",
+                   str(scene_out), name=STEM)
+    with zipfile.ZipFile(scene_out / "output" / f"{STEM}.skf") as archive:
+        # The scene's page travels under the official atlas name (see above):
+        # the rig's own file name would make the runtimes skip it.
+        assert [n for n in archive.namelist() if n.endswith(".png")] == \
+            ["atlas0.png"], archive.namelist()
+    godot_out = tmp_path / "godot-bundle"
+    bundle.convert(str(tmp_path / f"{STEM}.tscn"), "godot", "godot",
+                   str(godot_out), name=STEM)
+    assert (godot_out / "output" / PAGE).is_file()
 
 
 def test_spine_to_godot_roundtrip_agrees_numerically(tmp_path):

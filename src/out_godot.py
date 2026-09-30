@@ -5,8 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from .model import Skeleton, godot_transform2d, invert, multiply
-from .model import group_triangles
+from .model import Skeleton
 
 
 def _render_tscn(bone_nodes, polygon_nodes, animation_resources, animation_refs,
@@ -63,7 +62,7 @@ def write_godot_scene(model: Skeleton, output_path: str, texture_path: str, **kw
     if len(pages) > 1:
         page_ids = {page: str(index + 2) for index, page in enumerate(pages)}
         page_ids[pages[0]] = "1"
-    polygon_nodes = _emit_attachments(model, texture_path, page_ids)
+    polygon_nodes = _emit_attachments(model, page_ids)
     animation_resources, animation_refs = _emit_animations(model)
     content = _render_tscn(bone_nodes, polygon_nodes, animation_resources,
                            animation_refs, texture_path,
@@ -88,17 +87,25 @@ def _emit_bones(model):
         if bone.parent:
             parent_path = node_by_bone[bone.parent]
         node_by_bone[bone.name] = f"{parent_path}/{bone.name}"
-        cos = math.cos(math.radians(bone.rotation_deg))
-        sin = math.sin(math.radians(bone.rotation_deg))
+        # The SOLVED setup local when the rig has one: Godot runs no
+        # constraints, and the source's setup pose is constraint-solved, so the
+        # node has to stand where the source stands (the hero's thigh was 8.4
+        # degrees off without this). `rest` below stays the RAW bind pose — it
+        # drives the skinning basis, which the runtime never constrains.
+        solved = getattr(bone, "setup_solved", None)
+        node_pos, node_rot, node_scale = (
+            solved if solved else (bone.position, bone.rotation_deg, bone.scale))
+        cos = math.cos(math.radians(node_rot))
+        sin = math.sin(math.radians(node_rot))
         props = [
-            f"position = Vector2({round(bone.position[0], 6)}, {round(bone.position[1], 6)})",
-            f"rotation = {round(math.radians(bone.rotation_deg), 9)}",
+            f"position = Vector2({round(node_pos[0], 6)}, {round(node_pos[1], 6)})",
+            f"rotation = {round(math.radians(node_rot), 9)}",
         ]
         if bone.length:
             props += [
                 "auto_calculate_length_and_angle = false",
                 f"length = {round(bone.length, 6)}",
-                f"bone_angle = {round(bone.rotation_deg, 6)}",
+                f"bone_angle = {round(node_rot, 6)}",
             ]
         # Godot's Transform2D stores columns: x = (cos, sin), y = (-sin, cos).
         # rest comes from the model's bind pose when the godot->spine leg
@@ -153,7 +160,7 @@ def _attachment_node_names(model):
         names.append((att, node_name))
     return names
 
-def _emit_attachments(model, texture_path, page_ids=None):
+def _emit_attachments(model, page_ids=None):
     polygon_nodes = []
     for att, node_name in _attachment_node_names(model):
         polygon = att.polygon
@@ -188,27 +195,16 @@ def _emit_attachments(model, texture_path, page_ids=None):
         if not att.setup:
             props.append("visible = false")
         if att.polygons:
-            groups = att.polygons
-            if groups and isinstance(groups[0], int):
-                # Flat triangle index list (spine `triangles`): emit ONE GROUP
-                # PER TRIANGLE. Godot fan-triangulates each PackedInt32Array as
-                # a single polygon — 192 indices in one group is a 192-gon whose
-                # triangulation degenerates and the mesh silently draws nothing
-                # (the hero's cape). A 3-index group IS a triangle.
-                props.append(
-                    "polygons = [%s]" % ", ".join(
-                        "PackedInt32Array(%d, %d, %d)"
-                        % (groups[i], groups[i + 1], groups[i + 2])
-                        for i in range(0, len(groups) - 2, 3)
-                    )
+            # Godot fan-triangulates each PackedInt32Array as a single polygon,
+            # so the rig's groups are emitted one to one: a long index list in
+            # one group is a many-gon whose triangulation degenerates and the
+            # mesh silently draws nothing (the hero's cape).
+            props.append(
+                "polygons = [%s]" % ", ".join(
+                    "PackedInt32Array(%s)" % ", ".join(str(i) for i in group)
+                    for group in att.polygons
                 )
-            else:
-                props.append(
-                    "polygons = [%s]" % ", ".join(
-                        "PackedInt32Array(%s)" % ", ".join(str(i) for i in group)
-                        for group in groups
-                    )
-                )
+            )
         if weights:
             parts = []
             for bone_name, vertex_weights in weights:
@@ -255,32 +251,28 @@ def _emit_attachments(model, texture_path, page_ids=None):
 
 
 def _segment_handles(curve, time0: float, time1: float,
-                     value0: float, value1: float, mirror: bool) -> tuple:
-    """One spine segment -> Godot (out-handle, in-handle) value offsets.
+                     value0: float, value1: float) -> tuple:
+    """One segment's control points -> Godot (out-handle, in-handle) offsets.
 
-    Spine control points are absolute time/value (CurveTimeline.setBezier);
-    Godot handles are offsets from their key's time and value. ``mirror``
-    flips the value axis (rotation and Y negate between the spaces), so a
-    handle's value offset is negated with it.
+    The rig keeps control points in the key's own value space, which is the
+    space Godot handles are offsets in, so the conversion is a subtraction.
     """
     dt = time1 - time0
-    sign = -1.0 if mirror else 1.0
     if curve == "stepped":
         return (dt / 3.0, 0.0), (-dt / 3.0, 0.0)
     if isinstance(curve, (list, tuple)):
         cx1, cy1, cx2, cy2 = (float(c) for c in curve[:4])
-        return ((cx1 - time0, sign * (cy1 - value0)),
-                (cx2 - time1, sign * (cy2 - value1)))
+        return ((cx1 - time0, cy1 - value0), (cx2 - time1, cy2 - value1))
     # Linear: a straight segment is its own handle pair.
-    dv = (value1 - value0) * sign
+    dv = value1 - value0
     return (dt / 3.0, dv / 3.0), (-dt / 3.0, -dv / 3.0)
 
 
-def _solve_handles(keys, times, spine_values, mirror: bool, axis: int = 0) -> tuple:
+def _solve_handles(keys, times, values, axis: int = 0) -> tuple:
     """Godot out/in handle offsets for one axis track, in Godot value space.
 
-    Translate curves carry 8 floats ([x1,y1,x2,y2] per segment); rotate uses
-    4. ``axis`` selects which half a translate track reads.
+    Translate and scale curves carry one quadruple per axis (8 floats);
+    rotate uses 4. ``axis`` selects which quadruple a two-axis track reads.
     """
     n = len(keys)
     out_h = [(0.0, 0.0)] * n
@@ -290,8 +282,7 @@ def _solve_handles(keys, times, spine_values, mirror: bool, axis: int = 0) -> tu
         if isinstance(curve, (list, tuple)) and len(curve) >= 8:
             curve = curve[axis * 4:(axis + 1) * 4]
         out, inn = _segment_handles(
-            curve, times[i], times[i + 1],
-            spine_values[i], spine_values[i + 1], mirror)
+            curve, times[i], times[i + 1], values[i], values[i + 1])
         out_h[i] = out
         in_h[i + 1] = inn
     return out_h, in_h
@@ -329,13 +320,9 @@ def _emit_animations(model):
                 keys = props["rotate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}"
                 if any(k.curve for k in keys):
-                    # Handle computation needs the key's value in spine offset
-                    # space (where CurveTimeline control points live):
-                    # angle = -(setup_spine + offset) and rotation_deg =
-                    # -setup_spine, so offset = -angle + rotation_deg.
-                    spine_values = [-k.angle + setup_rot for k in keys]
                     times = [k.time for k in keys]
-                    out_h, in_h = _solve_handles(keys, times, spine_values, True)
+                    out_h, in_h = _solve_handles(keys, times,
+                                                 [k.angle for k in keys])
                     tracks.append(("bezier", f"{base}:rotation_degrees",
                                    times, [k.angle for k in keys],
                                    out_h, in_h))
@@ -346,16 +333,11 @@ def _emit_animations(model):
                 keys = props["translate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}:position"
                 if any(k.curve for k in keys):
-                    # x: spine = kx - setup_x; y mirrors: spine = -ky - setup_y.
-                    # x: godot = spine + setup_x; y mirrors, so offset_y =
-                    # -ky - setup_y_spine = -ky + position[1].
-                    for axis, to_spine in (
-                            (0, lambda k: k.x - setup_pos[0]),
-                            (1, lambda k: -k.y + setup_pos[1])):
-                        spine_values = [to_spine(k) for k in keys]
+                    for axis in (0, 1):
+                        values = [k.x if axis == 0 else k.y for k in keys]
                         times = [k.time for k in keys]
-                        out_h, in_h = _solve_handles(keys, times, spine_values,
-                                                     axis == 1, axis=axis)
+                        out_h, in_h = _solve_handles(keys, times, values,
+                                                     axis=axis)
                         tracks.append(("bezier", f"{base}:{'xy'[axis]}",
                                        times, [k.x if axis == 0 else k.y for k in keys],
                                        out_h, in_h))
@@ -366,13 +348,11 @@ def _emit_animations(model):
                 keys = props["scale"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}:scale"
                 if any(k.curve for k in keys):
-                    # Scale is 1:1 between the spaces (a magnitude has no
-                    # direction), so spine values are the model values.
                     for axis in (0, 1):
-                        spine_values = [k.scale[axis] for k in keys]
+                        values = [k.scale[axis] for k in keys]
                         times = [k.time for k in keys]
-                        out_h, in_h = _solve_handles(keys, times, spine_values,
-                                                     False, axis=axis)
+                        out_h, in_h = _solve_handles(keys, times, values,
+                                                     axis=axis)
                         tracks.append(("bezier", f"{base}:{'xy'[axis]}",
                                        times,
                                        [k.scale[axis] for k in keys],

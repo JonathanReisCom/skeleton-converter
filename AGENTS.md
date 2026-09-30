@@ -30,6 +30,21 @@ one importer and one exporter per format. Currently: Godot Skeleton2D scenes
   truth for axis conventions, mirroring, absolute-vs-offset animation values,
   UV spaces, and the Godot `Transform2D` column order. Any change to those
   rules requires updating that section first.
+- **A compare pane is typed by its content, never by its folder name or by the
+  files it happens to carry.** A Spine skeleton is a Spine pane whether or not
+  its atlas was uploaded; typing it anything else drives it with a protocol it
+  does not speak. A pane that failed to load must be able to say so and end the
+  shell's wait — "loading…" forever is a bug in the shell, not a slow rig.
+- **`any(generator for …)` is always true.** `any(x.glob("*.png") for x in
+  dirs)` tests the truthiness of generator objects; flatten it
+  (`any(p for d in dirs for p in d.glob("*.png"))`).
+- **The runtime's own code is the contract; its bugs are part of the contract
+  too.** When a viewer disagrees with a written file, read the runtime's source
+  at the pinned commit and check what it *does* — not what a doc says. The
+  SkelForm player numbers a bundle's atlas pages by iteration order (its page
+  counter is dead code) and gives bones and vertices different camera
+  conventions; both had to be matched exactly, one of them compensated inside
+  our own pane. A written artifact can be perfect and still render black.
 
 ## Architecture
 
@@ -180,34 +195,30 @@ Two traps this catches:
 Pick an animation with real movement (`walk`, `run`) — some animations such as
 `fall` are nearly static by design and prove nothing.
 
-### Rule: shortcuts live in the Makefile, not a JS task runner
+### Rule: the Makefile holds only the page and the suite
 
-`make` wraps the two conversion flows (`godot-to-spine`, `spine-to-godot`,
-`test`). Do not add a `package.json` at the repo root or a pnpm/npm script to
-drive Python: the converter's whole promise is "zero third-party
+`make` is `studio`, `studio-stop` and `test` — nothing else. Conversions are
+`python3 -m src.cli convert` (the disk-side path, and what CI drives) or the
+studio (the browser path). A make target per direction was a second, drifting
+copy of both: it was deleted, and adding one back needs a reason beyond
+"it saves typing". Do not add a `package.json` at the repo root or a pnpm/npm
+script to drive Python: the converter's whole promise is "zero third-party
 dependencies", and `validation/package.json` is the only Node manifest — it is
 dev-only and must stay that way.
-
-Two details the targets must keep:
 
 - **`make` runs in the repo root**, which is exactly what `python3 -m src.cli`
   needs. That is why the shortcuts work from any directory while the raw
   command does not.
-- **Only `godot-to-spine` serves.** It writes a previewable bundle; the
-  Spine→Godot direction writes a `.tscn`, so its target prints where to load
-  the scene rather than starting a server over a folder no browser can render.
-
-Machine-specific paths belong in `local.mk` (gitignored), never in the
-committed `Makefile`. Both targets refuse an empty input and refuse to
-`rm -rf` an output of `/`.
+- **Nothing is machine-specific any more.** The old `local.mk` existed only to
+  feed the deleted conversion targets; the studio's own defaults
+  (`STUDIO_PORT`, `STUDIO_ROOT`) cover what is left.
 
 **Progress output is a contract.** Every step prints as `--> <what>`, and the
 CLI reports what it actually did with the source: the atlas it used, which
 constraints it baked and which the active skin skipped, how many bones were
 baked. That information is collected by the reader into `Skeleton.notes`, not
 recomputed by the CLI — the reader is the only layer that knows. Do not add a
-step that reports something the caller cannot verify (a bare "processing…"),
-and do not duplicate a line the CLI already prints from the Makefile.
+step that reports something the caller cannot verify (a bare "processing…").
 
 ### Rule: port solvers from the runtime, never from its documentation
 
@@ -233,7 +244,25 @@ plausible rig with a silently wrong pose:
   hero's unequipped chains by 228 units.
 - **`updateAppliedTransform` must not be re-run after a path constraint.** It
   extracts the local transform from world; re-propagating recomputes world from
-  stale parents and undoes the placement.
+  stale parents and undoes the placement. (Reading it once AFTER the whole solve
+  is fine, and is how the next bullet works.)
+- **An `inherit` mode is an ANIMATION concern, not just a setup one.** The
+  reader solves the setup local for a `noRotationOrReflection` bone, but its
+  KEYS were written with the source's own local — and the file has one
+  inheritance mode, so the runtime added the parent's rotation on top: the
+  hero's feet rode a whole shin rotation (104.6°) off, on every animated frame,
+  while their setup pose stayed correct. `bake_animation` re-reads the local
+  from the solved world for every bone whose `inherit` is not `normal`.
+- **`constructVerts`' bind blend is SEQUENTIAL, and the owner comes first.**
+  The point starts at the owning bone's transform (`inheritVert(init_pos,
+  ownerBone)`) and each bind then moves it a weighted step
+  (`p ← (1-w)·p + w·F·p`). Expanded, that gives each bind a coefficient of
+  `w_i` times the weights AFTER it, and the owner the product of what is left —
+  not a plain weighted average, and not a reverse-order folding of the
+  matrices. The two agree only when a single bind has weight 1, which is why
+  the old form passed every single-bind rig and put the hero's head and cape 43
+  and 69 units off at setup. The reader replays the same composition to invert
+  the writer; changing one without the other breaks the round trip.
 
 The check that catches all of these is numeric comparison against the runtime
 at the same pose, per skin:
@@ -246,6 +275,178 @@ node validation/constraint-reference.mjs <rig>.json <rig>.atlas [anim] [time]
 
 `tests/test_constraints.py` pins the solver to runtime-produced numbers, so a
 drift fails CI without needing the Spine rig.
+
+### Rule: a region quad needs its faces as soon as it becomes geometry
+
+Spine writes `triangles` for MESH attachments only; a region attachment is a
+`width`/`height`/`rotation`/`x`/`y` record and nothing else. SkelForm's region
+draw, though, is an axis-aligned rect built against the bone and it ignores the
+attachment's own `rotation` — so a region whose quad is not a multiple of 90
+degrees cannot be a texture rect and has to travel as geometry. Emitting the
+four vertices without their two triangles (`[[0,1,2],[0,2,3]]`) produces a
+visual no runtime can rasterize: the hero's arms, hands, legs and feet were all
+silently invisible, and the pane drew a head and a cape floating over nothing.
+The reader triangulates every 4-point attachment that carries no source
+triangles, and `test_a_rotated_region_is_written_with_its_faces` keeps it that
+way (the CI fixture's `torso-belt` is a region rotated 15 degrees).
+
+Faces are necessary but not sufficient: the quad's corners also have to sample
+the rect corners the SOURCE samples. `RegionAttachment.updateRegion` pairs
+corner 0 with the packed rect's bottom-left, corner 1 with top-left, and so on;
+`region_corner_uvs` is that pairing, and a region's uv list starting at the
+top-left instead is a one-step shift — a v-flip, which is what drew the hero's
+hands, feet and limbs upside down while the meshes beside them looked fine.
+`test_a_region_quad_pairs_its_uv_with_the_right_corner` pins it.
+
+Geometry, page pixels and uv RANGE can all be right while the pairing is
+wrong, which is why the three checks above missed it: they never asked which
+corner of the rect a given vertex points at. Compare that directly — resolve
+both runtimes' per-corner uv to a fraction of the packed rect and diff them.
+
+### Rule: an uprighted atlas page moves the uv with the pixels
+
+Spine's atlas packs a region with `rotate: 90` and its runtime spins the sprite
+back while sampling; SkelForm's runtimes have no such flag, so `out_skelform`
+turns the **pixels** upright instead (`png.rotate_quarter(clockwise=False)`).
+The uv has to follow, and the source's own corner uv says how: normalised
+against the packed rect a vertex samples `(a, b)`, and after the rewrite that
+same point sits at `(b, 1 - a)` of the sprite's rect.
+
+Recomputing the uv from the written geometry instead — normalising inside the
+bounding box of the quad as it sits in the file — is what squeezed and cut
+every sprite: a mesh quad written in a rotated bone's frame is *not*
+axis-aligned, so its bbox is not the quad, and the uv stopped being corners
+(values like 0.055/0.833 instead of 0/1).
+
+Check it against pixels, never by eye: crop the sprite out of both pages and
+assert `new(x, y) == src(W-1-y, x)` — the transform is a pure quarter turn with
+no mirroring, and the uv must be its exact inverse.
+`tests/test_ci_gates.py::test_rotated_atlas_region_reaches_the_vertex_uv` pins
+the permutation.
+
+### Rule: `skin: true` gates drawing, not just solving
+
+A bone flagged `skin: true` starts inactive, and `Skeleton.updateCache`
+activates only the ACTIVE skin's own bones and their ancestors — so a slot on
+such a bone draws nothing at all: `Skeleton.getBounds` skips it (`!slot.bone
+.active`) and so does the draw loop. `constraints.active_bones` ports that rule
+for the solver; the attachments have to honour it too. Without it the hero's
+`chain*` links (declared by `weapon/morningstar` alone, `default` untouched)
+convert as equipped, and the rig draws a morningstar the Spine pane never shows
+— which also stretches the viewer's framing box, so the rig is framed smaller
+than the pane beside it.
+
+### Rule: comparing the panes — seek, then read the BONES before the pixels
+
+The comparator is the arbiter for visual parity — the studio emits one pane per
+format now, so it is N panes, not two — and the cheap way to run it is bone data,
+not eyeballs. (For the neighbouring question — does a pane animate
+at all — the rule above applies; this one compares the panes at ONE moment.)
+The repeatable procedure:
+
+1. **Convert fresh.** Never compare the job the user is looking at — it usually
+   predates the last fix. Keep the studio's own `1-source-*` bundle as the left
+   pane and convert the same upload next to it:
+
+   ```bash
+   python3 -m src.cli convert <upload>.json --from spine --to skelform \
+     --atlas <upload>.atlas -o tmp/cmp/2-target --name <stem>
+   # then: src.compare_out.emit_compare(Path('tmp/cmp/1-source'), Path('tmp/cmp/2-target'))
+   ```
+
+2. **Serve and open it in a MANAGED browser** (`browser.open`), never the user's
+   Chrome: a background tab's WebGL canvas is discarded by the compositor, the
+   screenshot comes back black, and that reads exactly like a broken rig. Serve
+   with `hub op=start python3 -m http.server <port> --directory tmp/cmp`.
+
+3. **Pause and switch through the SHELL**, so both panes follow:
+   `document.getElementById('freezer').click()`, then click the `#tracks` button
+   whose text is the animation name. The shell seeks both panes to the same `t`
+   every frame (`seekAll`), and the Spine pane needs `state.setAnimation` on a
+   switch — the shell does that, a bare `trackTime` write does not.
+
+4. **Diff the BONES first.** Exact, pose-sensitive, and it names the culprit in
+   one shot:
+
+   | pane | world rotation | local |
+   |---|---|---|
+   | Spine | `Math.atan2(bone.b, bone.a)` over `__skeleton.bones` | — |
+   | SkelForm | `cachedBones[i].rot` (already accumulated) | `armature.bones[i].init_rot` |
+
+   The file frame mirrors y, so compare `spine_rot` against `-file_rot`. On the
+   hero, 17 of 19 bones landed within 0.06° and the two feet were off by exactly
+   their parent's rotation — a diagnosis no screenshot gave.
+
+5. **Only then compare pixels.** One screenshot, crop each pane's canvas, diff
+   with `max(|Δchannel|) > 48`. Two hard limits: the panes FRAME the rig
+   differently (each has its own `fit`), so a raw diff can only say "not
+   aligned"; and the left pane draws region-quad outlines over the rig, which
+   defeats bbox-based alignment. Say which of the two you measured.
+
+**Both panes must frame identically or nothing lines up.** Four separate things
+had to match, and each one alone was enough to make the rigs different sizes:
+
+- **The same box**, which means the same SET of drawn art: a bigger box is
+  either extra art (a wrong `hidden`/`init_hidden`) or wrong geometry (see the
+  bind-blend bullet above). Check it directly: the Spine pane's
+  `skeleton.getBounds(offset, size)` against the SkelForm pane's
+  `document.body.dataset.fit.world`.
+- **The same margin**, as a constant written in both templates (0.85) — one
+  pane used `* 0.85` and the other `/ 1.2` while claiming to be equivalent.
+- **The same background.** A different clear colour makes every background
+  pixel differ and drowns the real signal; the Spine pane's `gl.clearColor`
+  must be the `--bg` the SkelForm pane shows through its transparent canvas.
+- **The same blend mode, taken from the atlas.** `drawSkeleton`'s second
+  argument IS `premultipliedAlpha`, and passing a hard `true` overrides the
+  `pma` flag read from the atlas on the line above. Every exporter leaves fully
+  transparent pixels at a sprite's border carrying RGB — legal in a
+  non-premultiplied page and invisible under `SRC_ALPHA`, but a premultiplied
+  blend (`ONE, ONE_MINUS_SRC_ALPHA`) adds that RGB straight in and outlines
+  every attachment in white. That was the Spine pane's mystery outline, and the
+  SkelForm pane never showed it because its runtime premultiplies the upload
+  (`UNPACK_PREMULTIPLY_ALPHA_WEBGL`), turning those pixels into (0,0,0,0).
+- **The same units.** The Spine camera works in BACKING pixels (its viewport is
+  the DPR-scaled drawing buffer) while the SkelForm fit works in CSS pixels:
+  divide by `canvas.width / canvas.clientWidth` before comparing scales.
+
+The Spine pane's fit also has to run from the LIVE canvas: it ran once inside
+`app.init`, before the app gave the canvas its size, and against a default
+300x150 the rig framed into a corner. Re-fit whenever the canvas measures
+differently (`__fitIfResized` in the render loop), not just on `resize` — the
+pane is laid out after the iframe loads, and its resize event can fire before
+the listener exists.
+
+Measured after all four: the two setup boxes agree to the unit, the scales to
+~1%, and the panes show the same pose at the same size.
+
+**What the boxes cannot agree on yet:** the source's setup pose is
+CONSTRAINT-SOLVED — the runtime runs its IK on `updateWorldTransform` with no
+animation playing — while the file's is plain FK, because SkelForm has no
+constraints (`inverse_kinematics: []`). Playback matches (the keys are baked),
+but a static frame does not: the hero's `thigh1` is 8.4° off at setup, and that
+is the ~1% left in the framing. Closing it means carrying the solved setup
+locals in the MODEL (the Spine leg re-exports the constraints and must not
+double-solve them), so it is a model change, not a viewer tweak.
+
+Gotchas that cost real time:
+
+- **`page.evaluate` from the parent cannot see a same-origin iframe's globals**
+  (isolated world). Inject a `<script>` into the iframe's document and read the
+  answer back through a DOM node — or inject into ONE iframe and let it reach
+  the other through `window.parent.frames[0]`: the whole computation then runs
+  in one world and no value crosses the boundary.
+- **`tab.run(fn)` does not capture closures.** Inline the values into the script
+  text you inject; do not expect an argument to arrive.
+- **The Spine canvas backing store is DPR-scaled** (1063x1144 for an 850x915 CSS
+  box). Divide its screen coords by
+  `canvas.width / canvas.getBoundingClientRect().width` before comparing with a
+  CSS-pixel crop, or every fit lands 25% off.
+- **`SkeletonDebugRenderer`'s flags are not what draws the left pane's region
+  outlines**, and `spine-webgl` 4.2 has no `debugRendering` to switch off. Do
+  not spend time there.
+- **After setting the SkelForm pane's `constructOptions` by hand, force a
+  redraw** with `rendered = false; lastAnimFrame = -1` — a frozen pane skips the
+  render and your new camera never reaches the canvas.
 
 ### Rule: a passing round-trip test does not prove the .tscn loads
 
@@ -371,25 +572,34 @@ first key a track **extrapolates its first real segment backwards**
 and past the last key it **freezes** (a looping Spine track wraps instead —
 samplers must use loop=false or times past the duration compare garbage).
 
-### Rule: each interpolation format keeps its own value space
+### Rule: one value space — the key's own
 
-Bezier control points live in the raw JSON's **offset space** (the values a
-Spine key carries), not in Godot's absolute track values. Every leg maps
-through its own affine transform, and the inverse is not the same map:
+`Key.curve` holds control points in **the same value space as the key's own
+values** (absolute time, and a value component in `angle` / `x` / `y` /
+`scale` units). One quadruple `[t1, v1, t2, v2]` on a single-value track
+(rotate), one quadruple per value axis on a two-axis track (translate,
+scale). Every reader stores the curve in that space and every writer maps it
+through the same affine transform it applies to the values themselves —
+no format's convention is the rig's convention, and no module needs a
+setup-offset correction just to talk about curves.
 
-- rotate: godot = -(setup_spine + offset) ⇒ offset = -angle + rotation_deg
-- translate x: godot = offset + setup_x ⇒ offset = v - position[0]
-- translate y: godot = -(offset + setup_y) ⇒ offset = position[1] - v
+Two landmines, both measured:
 
-Getting the sign right by reasoning alone failed twice; what settled it was
-sampling both engines (`bezier_track_interpolate` in Godot, the official
-runtime on the same rig) and matching numbers. Two semantics landmines:
-translate curves carry 8 floats ([x1,y1,x2,y2] per segment — slice per axis,
-never `curve[:4]` for y), and spine-core evaluates a curve as 9 pre-sampled
-linear segments while Godot solves the cubic exactly, so ≤0.13° difference
-between engines on a hard curve is inherent to the runtimes. When two layers
-disagree about which axis a merged translate curve half belongs to
-(`_merge_axis`), the fix is bookkeeping, not math.
+- A two-axis track must carry 8 numbers. Spine indexes the curve by axis, so
+  a lone quadruple makes the runtime read past the array and fill the bone
+  with NaN. Never emit a 4-value curve on translate/scale.
+- Runtimes disagree on **degenerate** curves. A zeroed handle pair (both value
+  controls on the segment's start) is nearly straight for an iterative solver
+  but comes out NaN on Spine's pre-sampled table, and spine-core reads every
+  curve as 9 linear segments while Godot solves the cubic exactly — that
+  ≤0.13° and ≤0.6-unit noise on a hard curve is inherent to the runtimes, not
+  a conversion error.
+
+Getting a sign wrong by reasoning alone failed twice; sampling both engines
+(`bezier_track_interpolate` in Godot, the official runtime on the same rig)
+is what settled it. When two layers disagree about which quadruple a merged
+two-axis curve half belongs to (`_merge_axis`), the fix is bookkeeping, not
+math.
 
 ### Rule: mirror the runtime's slot state at all three boundaries
 

@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from .model import Attachment, Bone, Key, Skeleton, spine_inverse
+from .model import Attachment, Bone, Key, Skeleton
 
 # ---------------------------------------------------------------------------
 # .tscn text parsing
@@ -244,7 +244,7 @@ def parse_polygon_weights(raw) -> list:
     return out
 
 
-def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = None) -> dict:
+def read_godot_animation(animation: dict, prefix: str) -> dict:
     props = animation["props"]
     tracks = {}
     visible_tracks: dict = {}
@@ -262,7 +262,7 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
         values = keys.get("values", [])
         if bone_name and property_name == "rotation_degrees" and track_type == "bezier":
             tracks.setdefault(bone_name, {})["rotate"] = _bezier_keys(
-                times, keys.get("points", []), model, bone_name, "rotate")
+                times, keys.get("points", []), "rotate")
         elif bone_name and property_name == "rotation_degrees":
             tracks.setdefault(bone_name, {})["rotate"] = [
                 Key(time=float(t), angle=float(v))
@@ -271,7 +271,7 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
         elif bone_name and property_name.startswith("position") and track_type == "bezier":
             axis = "x" if property_name.endswith(":x") else "y"
             axis_keys = _bezier_keys(
-                times, keys.get("points", []), model, bone_name, "translate",
+                times, keys.get("points", []), "translate",
                 axis=axis)
             existing = tracks.get(bone_name, {}).get("translate")
             tracks.setdefault(bone_name, {})["translate"] = _merge_axis(
@@ -284,7 +284,7 @@ def read_godot_animation(animation: dict, prefix: str, model: Skeleton | None = 
         elif bone_name and property_name.startswith("scale") and track_type == "bezier":
             axis = "x" if property_name.endswith(":x") else "y"
             axis_keys = _bezier_keys(
-                times, keys.get("points", []), model, bone_name, "scale",
+                times, keys.get("points", []), "scale",
                 axis=axis)
             existing = tracks.get(bone_name, {}).get("scale")
             tracks.setdefault(bone_name, {})["scale"] = _merge_scale_axis(
@@ -339,17 +339,15 @@ def _slot_timelines(visible_tracks: dict, node_attachments: dict) -> dict:
     return timelines
 
 
-def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
-    """Bezier track points -> key dicts with a spine-space ``curve`` per key.
+def _bezier_keys(times, points, kind, axis=None) -> list:
+    """Bezier track points -> key dicts with a ``curve`` per key.
 
     Godot points per key: [value, in_t, in_v, out_t, out_v], handles as
-    offsets from the key. The curve segment key i -> i+1 lives on key i:
-    [t0 + out_t, spine(t0), t1 + in_t, spine_v1] with the value controls
-    mapped back through the writer's affine transform (Godot -> spine).
+    offsets from the key. The segment key i -> i+1 lives on key i as
+    [t0 + out_t, value(t0), t1 + in_t, value(t1)] — Godot's control points are
+    already in the key's own value space, which is the rig's, so they are
+    stored verbatim.
     """
-    bone = model.by_name.get(bone_name) if model else None
-    to_spine = spine_inverse("rotate" if kind == "rotate" else "translate",
-                              axis, bone) if bone else (lambda v: v)
     n = len(times)
     values = [points[i * 5] for i in range(n)]
     in_h = [(points[i * 5 + 1], points[i * 5 + 2]) for i in range(n)]
@@ -368,9 +366,9 @@ def _bezier_keys(times, points, model, bone_name, kind, axis=None) -> list:
             key = Key(time=float(times[i]), **{axis: float(values[i])})
         if i < n - 1:
             cx1 = times[i] + out_h[i][0]
-            cy1 = to_spine(values[i] + out_h[i][1])
+            cy1 = values[i] + out_h[i][1]
             cx2 = times[i + 1] + in_h[i + 1][0]
-            cy2 = to_spine(values[i + 1] + in_h[i + 1][1])
+            cy2 = values[i + 1] + in_h[i + 1][1]
             key.curve = [cx1, cy1, cx2, cy2]
         keys.append(key)
     return keys
@@ -380,8 +378,8 @@ def _merge_axis(existing: list | None, axis_keys: list, axis: str) -> list:
     """Merge one bezier axis into the combined translate channel.
 
     The other axis may come from a linear value track (no curve) or a second
-    bezier track; linear keys get straight control points so the spine 8-tuple
-    stays dense (readCurve indexes curve[value << 2]).
+    bezier track; linear keys get straight control points so the two-axis
+    layout stays dense — a writer indexes the curve by axis.
     """
     if existing is None:
         return axis_keys
@@ -401,7 +399,13 @@ def _merge_axis(existing: list | None, axis_keys: list, axis: str) -> list:
         else:
             v0 = v1 = getattr(k0, other)
         dt = k1.time - k0.time
-        straight = [k0.time + dt / 3.0, v0, k1.time - dt / 3.0, v1]
+        # The controls sit a third of the way along BOTH axes. Putting them on
+        # the endpoint values instead (v0, v1) makes every fallback segment an
+        # ease-in-out: in normalized handles that is p1y = 0, p2y = 1, whereas
+        # a straight line needs p1y = 1/3 and p2y = 2/3.
+        dv = v1 - v0
+        straight = [k0.time + dt / 3.0, v0 + dv / 3.0,
+                    k1.time - dt / 3.0, v1 - dv / 3.0]
         merged = Key(time=k0.time, curve=list(curve_x or straight) + list(curve_y or straight))
         setattr(merged, axis, getattr(k1, axis))
         setattr(merged, other, getattr(k0, other))
@@ -427,7 +431,13 @@ def _merge_scale_axis(existing: list | None, axis_keys: list, axis: str) -> list
         v0 = k0.scale[other]
         v1 = existing[i + 1].scale[other] if i + 1 < len(existing) else v0
         dt = k1.time - k0.time
-        straight = [k0.time + dt / 3.0, v0, k1.time - dt / 3.0, v1]
+        # The controls sit a third of the way along BOTH axes. Putting them on
+        # the endpoint values instead (v0, v1) makes every fallback segment an
+        # ease-in-out: in normalized handles that is p1y = 0, p2y = 1, whereas
+        # a straight line needs p1y = 1/3 and p2y = 2/3.
+        dv = v1 - v0
+        straight = [k0.time + dt / 3.0, v0 + dv / 3.0,
+                    k1.time - dt / 3.0, v1 - dv / 3.0]
         merged_curve = list(curve_axis or straight) + list(curve_other or straight)
         values = [k0.scale[0], k0.scale[1]]
         values[factor] = k1.scale[factor]
@@ -570,7 +580,7 @@ def read_godot_skeleton(tscn_path: str) -> Skeleton:
             animation = scene["sub_resources"].get(match.group(1)) if match else None
             if animation and animation["type"] == "Animation":
                 tracks, visible_tracks = read_godot_animation(
-                    animation, prefix, model)
+                    animation, prefix)
                 model.animations[anim_name] = tracks
                 if visible_tracks:
                     model.slot_timelines[anim_name] = _slot_timelines(
