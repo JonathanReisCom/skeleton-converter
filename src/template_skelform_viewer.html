@@ -42,6 +42,7 @@ if (!window.hud) {
   throw new Error("hud.js missing");
 }
 const nodes = hud.mount({ title: "skelform web" });
+const explorer = hud.explorer();
 hud.setNote(nodes, TITLE + " · t=0.0");
 hud.watchErrors(nodes);
 const stats = document.createElement("div");
@@ -280,6 +281,33 @@ async function start() {
     hud.tracks(nodes, animations.map((a) => a.name), (name) => {
       window.previewPlay(name);
     }, defaultAnim);
+    // Attachment explorer: the same rows the Spine and Godot panes publish, so
+    // the compare shell fans a slot change out to every pane. SkelForm has no
+    // slots — the writer puts each attachment on its own bone (`visuals_id`)
+    // and the runtime toggles it with `hidden`, so a row is a bone carrying a
+    // visual and hiding it is that bone's flag. The runtime resets `hidden`
+    // from `init_hidden` on every frame (skelform-js.js: `if (!(mask &
+    // FLAGS.Hidden)) bone.hidden = bone.init_hidden`), so BOTH are written or
+    // the next draw undoes the change. Before this the pane ignored the
+    // sidebar entirely: picking "(none)" for a slot hid it in every other pane
+    // and left this one drawing it, which reads as a conversion bug and is not.
+    function setSlotVisible(name, visible) {
+      const bone = (skfc.armature.bones || []).find((b) => b.name === name);
+      if (!bone) return;
+      bone.hidden = !visible;
+      bone.init_hidden = !visible;
+      skfc.rendered = false;   // one draw with the new flag
+    }
+    const slotRows = () => (skfc.armature.bones || [])
+      .filter((b) => b.name && b.visuals_id !== undefined && b.visuals_id >= 0)
+      .map((b) => ({
+        name: b.name,
+        options: [b.name],
+        value: b.hidden ? "" : b.name,
+        onPick: (value) => setSlotVisible(b.name, value !== ""),
+      }));
+    window.__attachmentRows = slotRows;
+    hud.explorerRows(explorer, slotRows());
     // Frame AFTER the runtime has placed the vertices: constructVerts runs per
     // frame and leaves every vert at its bind bone's world, which is the box
     // to frame. Measuring before the first frame framed the STORED local

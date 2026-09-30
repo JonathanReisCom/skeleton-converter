@@ -193,7 +193,7 @@ Semantics worth knowing when debugging a frozen compare:
   aborts `_ready` and leaves the pane black with no visible cause. Checked by
   running the engine headless, not by reading the docs.
 
-## Attachment explorer (both panes)
+## Attachment explorer (every pane)
 
 **Inside a compare shell the panes hide their own chrome** — the shell's left
 sidebar is the control surface (tracks, master clock, freeze, grid, and one
@@ -202,6 +202,21 @@ driving the same thing would just be noise. The explorer travels with that
 chrome: it is available when a pane is opened on its own (a bundle's
 `index.html`, or `view`), not in the compare grid. To bring it back inside the
 grid, drop `.embedded .hud-toggle` from the hide rule in `src/static/hud.css`.
+
+**A pane that does not publish `__attachmentRows` silently ignores the sidebar.**
+That is how the SkelForm pane behaved: picking "(none)" for a slot hid it in the
+Spine and Godot panes and left the SkelForm pane drawing it, which reads as a
+conversion bug and is not one. The SkelForm leg has no slots to point at — the
+writer puts each attachment on its own bone (`bones[i].visuals_id`) — so a row is
+a bone carrying a visual, and hiding it is that bone's flag. Two things to know:
+
+- **`hidden` is reset every frame** from `init_hidden`
+  (`skelform-js.js`: `if (!(mask & FLAGS.Hidden)) bone.hidden = bone.init_hidden`),
+  so a manual toggle must write BOTH or the next draw undoes it.
+- **The row name is the bone name**, which equals the slot name only when the rig
+  has a bone of that name. A slot whose visual landed on a dominant bone
+  (`chain-round2` → `chain2`) cannot be matched by the shell's fan-out; the hide
+  then reaches the other panes only.
 
 A slot's skin map holds *many* attachments (eye shapes, hair, props), not one.
 The model keeps them all — `Attachment.slot` names the owner, `Attachment.name`
