@@ -147,6 +147,38 @@ def _curve_in_key_space(curve, value_map, axis: int | None = None):
     return tuple(out)
 
 
+def _curve_two_axis(curve, map_x, map_y):
+    """A two-axis curve with each quadruple mapped through its OWN transform.
+
+    Translate curves carry one quadruple per value axis, and the two axes are
+    converted differently (x keeps its sign and gains the setup offset, y
+    flips), so one ``value_map`` cannot do both. Mapping only the y quadruple
+    left the x control values in Spine units: the keys stayed exact and only
+    the interpolation inside a segment drifted — a rig whose translation keys
+    all agreed still walked its body and arms off centre mid-segment.
+
+    Spine shares a single 4-float curve between both axes; expanding it keeps
+    each axis in its own space instead of picking one axis's transform.
+    """
+    if not isinstance(curve, (list, tuple)):
+        return curve
+    out = list(curve)
+    if len(out) >= 8:
+        for base, mapper in ((0, map_x), (4, map_y)):
+            out[base + 1] = mapper(out[base + 1])
+            out[base + 3] = mapper(out[base + 3])
+        return tuple(out)
+    if len(out) >= 4:
+        mapped = []
+        for mapper in (map_x, map_y):
+            quad = list(out[:4])
+            quad[1] = mapper(quad[1])
+            quad[3] = mapper(quad[3])
+            mapped.extend(quad)
+        return tuple(mapped)
+    return tuple(out)
+
+
 def read_skeleton(json_path: str, atlas_path: str | None = None,
                   skin: str | None = None) -> Skeleton:
     """Read Spine JSON + optional atlas into the canonical model (Godot space).
@@ -488,9 +520,10 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                     Key(time=k.get("time", 0.0),
                         x=setup_pos[0] + k.get("x", 0.0),
                         y=-(setup_pos[1] + k.get("y", 0.0)),
-                        curve=_curve_in_key_space(
+                        curve=_curve_two_axis(
                             k.get("curve"),
-                            lambda v: -(setup_pos[1] + v), axis=1))
+                            lambda v: setup_pos[0] + v,
+                            lambda v: -(setup_pos[1] + v)))
                     for k in props["translate"]
                 ]
             if props.get("scale"):

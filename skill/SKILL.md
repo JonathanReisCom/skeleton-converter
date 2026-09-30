@@ -236,6 +236,23 @@ entry exactly as the runtime's `setAttachment` does. Three things to know:
   time; the runtime's timeline search applies it strictly after. Sampling
   exactly on a key time can disagree; sample a tick past it.
 
+## Motion between keys (converted)
+
+Spine curves are control points, and a two-axis (translate/scale) curve carries
+**one quadruple per value axis** — each axis in its own value space. A single
+`value_map` cannot convert both: x keeps its sign and gains the setup offset, y
+flips. Converting only the y quadruple left the x control values in Spine units,
+and the failure is quiet: **every key stayed exact to 4 decimals and only the
+motion between keys drifted.** The hero's body and left arm walked tens of units
+off centre mid-segment on `idle-from fall` (worst 35 against 0 at the keys)
+while all sampled key times agreed.
+
+So: **keys exact + segments wrong is a control-point space bug, not a value bug.**
+Sample *between* keys when a rig "looks wrong but matches at key times", and
+check `Key.curve`'s quadruples per axis rather than trusting that the key values
+agree. A 4-float curve is shared by both axes in Spine, so it must be expanded
+into an 8-float one with each axis mapped by its own transform.
+
 ## Scale tracks (converted)
 
 Spine `scale` timelines are absolute local scale and map 1:1 to Godot's
