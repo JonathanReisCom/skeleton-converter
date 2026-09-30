@@ -172,7 +172,18 @@ def test_pages_are_written_in_the_order_the_runtime_numbers_them(tmp_path):
     # The two source pages collapse into one: `SkfDraw` flushes a batch with the
     # INCOMING page's texture when the page changes, so pieces gathered before a
     # switch would be drawn with the wrong sheet. One page removes the switch.
-    assert members == ["armature.json", "readme.md", "editor.json", "atlas0.png"]
+    #
+    # Asserted as the RULE, not as a literal list: the metadata trio first, the
+    # pages contiguous and in `atlases` order, and everything else AFTER them.
+    # A member inserted before the pages shifts every index the player assigns,
+    # and a multi-page rig then samples the wrong sheets and dies with
+    # "Cannot read properties of undefined (reading 'size')" — which is exactly
+    # how the slot map below broke it once.
+    assert members[:3] == ["armature.json", "readme.md", "editor.json"]
+    pages = [name for name in members if name.startswith("atlas")
+             and name.endswith(".png")]
+    assert members[3:3 + len(pages)] == ["atlas0.png"]
+    assert members[3 + len(pages):] == ["slots.json"]
     assert len(written["atlases"]) == 1
     assert {texture["atlas_idx"] for texture in written["styles"][0]["textures"]} == {0}
     assert [page["filename"] for page in written["atlases"]] == ["atlas0.png"]

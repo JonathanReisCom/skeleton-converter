@@ -314,7 +314,15 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         bones = att.get("bones")
         triangles = att.get("triangles", [])
 
-        region = atlas_regions.get(attachment_name) or atlas_regions.get(slot_name)
+        # Spine's `path` is the region an attachment DRAWS, and it exists so an
+        # entry can reuse another region's art (a new piece pointing at an old
+        # sprite is the normal way to add one). Looking up only the attachment
+        # name left such an entry with no region: no page, no rect, and a
+        # bundle whose texture entry pointed at a page that does not exist —
+        # which crashes the SkelForm runtime rather than skipping the piece.
+        region = (atlas_regions.get(att.get("path") or attachment_name)
+                  or atlas_regions.get(attachment_name)
+                  or atlas_regions.get(slot_name))
         if region:
             region_left, region_top, region_right, region_bottom = region_uv_rect(
                 region

@@ -282,32 +282,73 @@ async function start() {
       window.previewPlay(name);
     }, defaultAnim);
     // Attachment explorer: the same rows the Spine and Godot panes publish, so
-    // the compare shell fans a slot change out to every pane. SkelForm has no
-    // slots — the writer puts each attachment on its own bone (`visuals_id`)
-    // and the runtime toggles it with `hidden`, so a row is a bone carrying a
-    // visual and hiding it is that bone's flag. The runtime resets `hidden`
-    // from `init_hidden` on every frame (skelform-js.js: `if (!(mask &
-    // FLAGS.Hidden)) bone.hidden = bone.init_hidden`), so BOTH are written or
-    // the next draw undoes the change. Before this the pane ignored the
-    // sidebar entirely: picking "(none)" for a slot hid it in every other pane
-    // and left this one drawing it, which reads as a conversion bug and is not.
-    function setSlotVisible(name, visible) {
-      const bone = (skfc.armature.bones || []).find((b) => b.name === name);
-      if (!bone) return;
-      bone.hidden = !visible;
-      bone.init_hidden = !visible;
-      skfc.rendered = false;   // one draw with the new flag
+    // the compare shell fans a slot change out to every pane. Rows are named by
+    // SLOT, taken from `slots.json` — a member our writer adds and the runtimes
+    // ignore — because the shell matches panes by slot name, and naming them
+    // after the bone that draws the visual (`HandObject_01`) matched nothing:
+    // a pick in the sidebar silently skipped this pane. The runtime resets
+    // `hidden` from `init_hidden` on every frame (`skelform-js.js`: `if (!(mask
+    // & FLAGS.Hidden)) bone.hidden = bone.init_hidden`), so BOTH are written or
+    // the next draw undoes the change.
+    let slotMap = {};
+    try {
+      const zip = await JSZip.loadAsync(await (await fetch(SKF_URL)).blob());
+      const member = zip.file("slots.json");
+      if (member) slotMap = JSON.parse(await member.async("string"));
+    } catch (error) { /* a bundle written before the map: rows fall back to bones */ }
+
+    const findBone = (name) => (skfc.armature.bones || []).find((b) => b.name === name);
+    function setBoneHidden(name, hidden) {
+      const bone = findBone(name);
+      if (!bone) return false;
+      bone.hidden = hidden;
+      bone.init_hidden = hidden;
+      return true;
     }
-    const slotRows = () => (skfc.armature.bones || [])
-      .filter((b) => b.name && b.visuals_id !== undefined && b.visuals_id >= 0)
-      .map((b) => ({
-        name: b.name,
-        options: [b.name],
-        value: b.hidden ? "" : b.name,
-        onPick: (value) => setSlotVisible(b.name, value !== ""),
-      }));
+    function setSlotVisible(slot, chosen) {
+      const entries = slotMap[slot];
+      if (!entries) return false;
+      for (const [name, boneName] of Object.entries(entries)) {
+        // `setBoneHidden` takes HIDDEN, not visible: passing the visible flag
+        // straight through drew every attachment of the slot EXCEPT the chosen
+        // one, and "(none)" un-hid the whole slot. The diagnostic this pane
+        // prints (`desenhando …`) is what caught it.
+        setBoneHidden(boneName, !(chosen !== "" && name === chosen));
+      }
+      skfc.rendered = false;   // one draw with the new flags
+      return true;
+    }
+    const slotRows = () => {
+      const rows = Object.entries(slotMap).map(([slot, entries]) => {
+        const names = Object.keys(entries);
+        const drawn = names.find((n) => {
+          const bone = findBone(entries[n]);
+          return bone && !bone.hidden;
+        });
+        return { name: slot, options: names, value: drawn || "",
+                 onPick: (value) => setSlotVisible(slot, value) };
+      });
+      if (rows.length) return rows;
+      // No map (an older bundle): rows are the bones that carry a visual, which
+      // at least keeps hide/show usable from this pane's own HUD.
+      return (skfc.armature.bones || [])
+        .filter((b) => b.name && b.visuals_id !== undefined && b.visuals_id >= 0)
+        .map((b) => ({ name: b.name, options: [b.name],
+                       value: b.hidden ? "" : b.name,
+                       onPick: (v) => { if (setBoneHidden(b.name, v === "")) skfc.rendered = false; } }));
+    };
     window.__attachmentRows = slotRows;
+    window.previewSetAttachment = (slot, value) => setSlotVisible(slot, value);
     hud.explorerRows(explorer, slotRows());
+    // Tell the shell the rows exist NOW. They are built here, inside `start()`,
+    // after the archive is fetched and parsed — while `previewPlay` (the
+    // shell's readiness test) is defined at script top level. The shell reads
+    // every pane's rows once, as soon as all panes report ready, so without
+    // this its fan-out ran before this pane had any and silently kept it out:
+    // a slot switch reached the other panes and never this one. Same hook the
+    // Godot wrapper uses when GDScript hands it its slots late.
+    try { window.top.__attachmentsChanged && window.top.__attachmentsChanged(); }
+    catch (error) { /* standalone: the panel above is the only explorer */ }
     // Frame AFTER the runtime has placed the vertices: constructVerts runs per
     // frame and leaves every vert at its bind bone's world, which is the box
     // to frame. Measuring before the first frame framed the STORED local
@@ -346,7 +387,20 @@ async function start() {
           skfc.armature.bones.length + " bones · " + visuals + " visuals · "
           + (skfc.armature.styles || []).length + " styles · active "
           + skfc.activeStyles.length + " · tex " + withTex + "/" + visuals
-          + " · atlas " + atlases.map((a) => (a.texture ? "gl" : "none")).join(",");
+          + " · atlas " + atlases.map((a) => (a.texture ? "gl" : "none")).join(",")
+          // Diagnostic: which of the hand-item bones are drawing right now,
+          // and under which visual. The pane's own panel is only built once,
+          // so it cannot answer "what is on screen at this instant".
+          + " · drawing " + (() => {
+            // No name assumptions: whatever carries a visual and is visible,
+            // capped so the line stays readable. A filter like /Hand|Support/
+            // would miss a piece nobody has thought of yet.
+            const on = (skfc.armature.bones || [])
+              .filter((b) => typeof b.visuals_id === "number"
+                       && b.visuals_id >= 0 && !b.hidden)
+              .map((b) => b.name);
+            return on.slice(0, 6).join(",") + (on.length > 6 ? "+" + (on.length - 6) : "");
+          })();
       } catch (error) {
         stats.textContent = "stats failed: " + error.message;
       }

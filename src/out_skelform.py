@@ -476,9 +476,20 @@ def _single_upright_page(model, textures: list, page_paths: list) -> tuple:
         slot = texture["atlas_idx"]
         source = page_paths[slot] if 0 <= slot < len(page_paths) else None
         if source is None or not Path(source).exists():
+            # No pixels reachable for this entry. Mark it and leave it OUT of
+            # the style below: `atlas_idx` still names a page the rewritten
+            # bundle no longer writes, and the runtime reads
+            # `atlases[tex.atlas_idx].texture` — an undefined atlas there is a
+            # TypeError that kills the whole pane, not just the piece. A
+            # skipped visual is what a missing page should cost.
+            texture["missing"] = True
             continue
         if slot not in decoded:
-            decoded[slot] = png.read_png(Path(source).read_bytes())
+            try:
+                decoded[slot] = png.read_png(Path(source).read_bytes())
+            except Exception:
+                texture["missing"] = True
+                continue
         page_w, page_h, rgba = decoded[slot]
         box = (int(texture["offset"]["x"]), int(texture["offset"]["y"]),
                int(texture["size"]["x"]), int(texture["size"]["y"]))
@@ -625,9 +636,24 @@ def _build_armature(model, fps: float, atlas_sizes: dict,
     # animated transform) and appended LAST, so it draws on top — matching the
     # source's slot order. Zero-area geometry (skin-gated weapon parts) stays
     # out: the runtime would draw it collapsed at the origin.
-    chosen_visuals = set(visual_by_slot.values())
+    # Ownership is read from the ARMATURE, not from `visual_by_slot`: an
+    # attachment can be chosen for a bone and then displaced by a better
+    # candidate (the one whose name IS the slot name outranks it), and the
+    # stale set still listed the loser as owned. It then got no bone at all —
+    # the visual stayed in the file, nothing drew it, and the slot map could
+    # not offer it. This rig's `SupportObject_01` lost to `R_Hand` exactly that
+    # way. Reading what the bones actually carry makes every attachment
+    # reachable, including one added tomorrow.
+    # `visuals_id` 0 is a VALID visual (the first one) and `x or -1` turns it
+    # into -1, so the owner of visual 0 read as unowned. Every such attachment
+    # then got a duplicate bone and the slot map dropped it — this rig's
+    # `SupportObject_01` (the shield) was exactly that case. Test for an int and
+    # compare, never for truthiness.
+    owned_visuals = {bone["visuals_id"] for bone in bones
+                     if isinstance(bone.get("visuals_id"), int)
+                     and bone["visuals_id"] >= 0}
     for index, attachment in enumerate(model.attachments):
-        if index in chosen_visuals:
+        if index in owned_visuals:
             continue
         span_x = max((p[0] for p in attachment.polygon), default=0.0) - \
             min((p[0] for p in attachment.polygon), default=0.0)
@@ -640,12 +666,24 @@ def _build_armature(model, fps: float, atlas_sizes: dict,
             total = sum(ws)
             if total > best and bone_name in id_by_name:
                 best, anchor_name = total, bone_name
-        if anchor_name is None or attachment.name in id_by_name:
+        if anchor_name is None:
             continue
         bone_id = len(bones)
         visual = visuals[index]
+        # Names are made UNIQUE instead of skipped. An attachment may share its
+        # name with a bone — this rig's `SupportObject_01` is both a bone and a
+        # skin entry — and the old `attachment.name in id_by_name: continue`
+        # dropped it entirely: the visual stayed in the file, nothing drew it,
+        # and the slot map could not offer it, so the attachment was
+        # unreachable for every reader and for the compare shell. A name is
+        # never a reason to lose art; only zero-area geometry is.
+        node_name = attachment.name
+        suffix = 0
+        while node_name in id_by_name:
+            suffix += 1
+            node_name = f"{attachment.name}__{suffix}"
         bones.append({
-            "id": bone_id, "name": attachment.name,
+            "id": bone_id, "name": node_name,
             "parent_id": id_by_name[anchor_name],
             "pos": _vec2(0.0, 0.0), "scale": _vec2(1.0, 1.0), "rot": 0.0,
             "init_pos": _vec2(0.0, 0.0), "init_rot": 0.0,
@@ -658,7 +696,9 @@ def _build_armature(model, fps: float, atlas_sizes: dict,
             "pivot_rot": visual["pivot_rot"],
             "pivot_scale": dict(visual["pivot_scale"]),
         })
-        id_by_name[attachment.name] = bone_id
+        # The UNIQUE name, so a later attachment with the same name gets its own
+        # bone instead of resolving to this one.
+        id_by_name[node_name] = bone_id
 
     atlases = []
     for page in pages:
@@ -679,7 +719,11 @@ def _build_armature(model, fps: float, atlas_sizes: dict,
         # style (`anim_tex_of` skips the rest), and a file that leaves every
         # style inactive opens showing bare bones and a "Unused textures" list.
         "styles": [{"id": 0, "name": "default", "active": True,
-                    "textures": [t for t in textures if t is not None]}],
+                    # `missing` entries are dropped, not carried: their page is
+                    # not in the bundle, and the runtime dereferences
+                    # `atlases[tex.atlas_idx]` while drawing.
+                    "textures": [t for t in textures
+                                 if t is not None and not t.get("missing")]}],
         "inverse_kinematics": [],
         "visuals": visuals,
         "physics": [],
@@ -787,6 +831,31 @@ def _build_animations(model, fps: float, id_by_name: dict) -> list:
     return animations
 
 
+def _slot_map(model: Skeleton, armature: dict) -> str:
+    """Slot -> {attachment: the bone that draws it}, as JSON.
+
+    Written beside the armature, never inside it: the armature's own format is
+    the vendor's and extra keys there are a compatibility risk, while a member
+    the runtimes do not know is ignored. Built from the armature rather than
+    from the writer's loop so the two can never disagree about which bone
+    ended up drawing an attachment.
+    """
+    # Same trap as above: visual 0 is valid, so it must not be filtered out by
+    # a truthiness test — doing so hid the shield from every slot row.
+    bone_of_visual = {bone["visuals_id"]: bone["name"]
+                      for bone in armature.get("bones", [])
+                      if isinstance(bone.get("visuals_id"), int)
+                      and bone["visuals_id"] >= 0}
+    slots: dict = {}
+    for index, attachment in enumerate(model.attachments):
+        bone = bone_of_visual.get(index)
+        if bone is None:
+            continue
+        slot = attachment.slot or attachment.name
+        slots.setdefault(slot, {})[attachment.name] = bone
+    return json.dumps(slots, indent=2)
+
+
 def _editor_json(armature: dict) -> str:
     """The editor's per-file state: fold flags per bone, active style."""
     bones = [{
@@ -868,6 +937,20 @@ def write_skelform(model: Skeleton, output_path: str, fps: float = DEFAULT_FPS,
                 source = by_name.get(page)
                 if source is not None and source.exists():
                     bundle.writestr(f"atlas{index}.png", source.read_bytes())
+            # Slot map, OURS to use: the armature only knows bones
+            # (`visuals_id`), while a comparison shell addresses attachments by
+            # SLOT name. Without it this pane offered rows named after the bone
+            # that draws the visual (`HandObject_01`) while every other pane
+            # offered the slot (`Solt : R_Hand`), so a pick in the sidebar
+            # matched nothing and the pane silently kept drawing — the bug
+            # where the source showed a sword and this pane did not.
+            # Appended LAST on purpose: the web player numbers the atlas pages
+            # it finds by ITERATION ORDER over the archive's members (the
+            # writer note above), so a member inserted before them shifts every
+            # index — a four-page rig then samples the wrong pages and dies
+            # with `Cannot read properties of undefined (reading 'size')`.
+            # A member after them cannot move an earlier one.
+            bundle.writestr("slots.json", _slot_map(model, armature))
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(payload, encoding="utf-8")

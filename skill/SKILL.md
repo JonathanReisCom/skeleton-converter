@@ -213,10 +213,39 @@ a bone carrying a visual, and hiding it is that bone's flag. Two things to know:
 - **`hidden` is reset every frame** from `init_hidden`
   (`skelform-js.js`: `if (!(mask & FLAGS.Hidden)) bone.hidden = bone.init_hidden`),
   so a manual toggle must write BOTH or the next draw undoes it.
-- **The row name is the bone name**, which equals the slot name only when the rig
-  has a bone of that name. A slot whose visual landed on a dominant bone
-  (`chain-round2` → `chain2`) cannot be matched by the shell's fan-out; the hide
-  then reaches the other panes only.
+- **The hide flag is `hidden`, not `visible`, and getting it backwards is
+  silent.** Passing the visible flag straight into a setter that stores `hidden`
+  drew every attachment of the slot EXCEPT the chosen one, and `(none)` un-hid
+  the whole slot — the exact opposite of intent, with no error anywhere. What
+  caught it is the pane's own `drawing …` line (bone#visual_id per visible hand
+  item): the pane's explorer panel is built ONCE, so its values are stale and
+  it cannot answer "what is on screen right now". Keep that line.
+- **A `visuals_id` of 0 is a real visual, and `x or -1` turns it into -1.** Every
+  truthiness test on that field silently drops the FIRST attachment of a rig:
+  its owner read as unowned, so the writer gave it a duplicate bone and the slot
+  map left it out — the piece then existed in the file, nothing drew it, and no
+  pane could offer it. This rig's `SupportObject_01` (the shield) was exactly
+  that. Compare an int, never truthiness.
+- **Ownership must be read from the armature, not from the intermediate pick.**
+  An attachment can be chosen for a bone and then displaced by a better
+  candidate; a set built during the choosing still lists the loser as owned, and
+  the leftover pass skips it — leaving a visual with no bone at all. Read
+  `bone["visuals_id"]` after the facts instead.
+- **An attachment draws its `path`, not its name.** Spine's `path` lets a new
+  entry reuse an existing region's art, which is the normal way to add a piece.
+  Resolving the region by name only left such an entry without a page, and the
+  bundle then carried a texture entry pointing at an atlas that does not exist —
+  `atlases[tex.atlas_idx].texture` throws and takes the WHOLE pane down. A page
+  that cannot be resolved must mark the entry missing and drop it from the
+  style, so the runtime skips that piece and keeps drawing the rest.
+- **Rows are named by SLOT, from a `slots.json` member the writer adds.** The
+  armature only knows bones (`visuals_id`), so naming rows after the bone that
+  draws a visual (`HandObject_01`) matched nothing: the shell fans a pick out by
+  slot name, and `Solt : R_Hand` never reached this pane while every other pane
+  drew it. The member must be written **after** the atlas pages — the web player
+  numbers pages by ITERATION ORDER over the archive's members, so a member
+  inserted before them shifts every index and a multi-page rig dies with
+  `Cannot read properties of undefined (reading 'size')`.
 
 A slot's skin map holds *many* attachments (eye shapes, hair, props), not one.
 The model keeps them all — `Attachment.slot` names the owner, `Attachment.name`
