@@ -230,3 +230,36 @@ def test_every_browser_viewer_links_the_shared_hud():
         text = (Path("src") / name).read_text(encoding="utf-8")
         assert 'href="hud.css"' in text, name
         assert 'src="hud.js"' in text, name
+
+
+def test_skinning_basis_matches_the_frame_the_polygons_are_in(tmp_path):
+    """`rest` is the skinning basis, and it must be the polygon's own frame.
+
+    Godot draws a skinned polygon as `pose * rest^-1 * point`. For a
+    Spine-sourced rig the polygons come from the constraint SOLVER's setup, so
+    the basis has to be that solved setup; emitting the raw local instead put
+    the hero's thigh1/shin1/foot1 8-9 units off (measured engine vs runtime),
+    which also inflated the pane's framing box by 8.6 units and drew the rig
+    2.6% smaller than the two panes beside it.
+    """
+    model = Skeleton()
+    # A constraint-driven bone: the solver's setup local differs from the raw
+    # one by 8.4 degrees (the hero's thigh case).
+    model.bones.append(Bone(name="root", parent=None, position=[0.0, 0.0],
+                            rotation_deg=0.0, path="root"))
+    model.bones.append(Bone(name="thigh", parent="root", position=[10.0, 0.0],
+                            rotation_deg=0.0, path="root/thigh",
+                            setup_solved=([12.0, 3.0], 8.4, [1.0, 1.0])))
+    out = tmp_path / "scene.tscn"
+    write_godot_scene(model, str(out), "res://page.png")
+    text = out.read_text()
+
+    block = text.split('[node name="thigh" type="Bone2D"')[1].split("\n[")[0]
+    rest = re.search(r"rest = Transform2D\(([^)]*)\)", block).group(1)
+    values = [float(v) for v in rest.split(",")]
+    # The solved setup is (12, 3) rotated 8.4 degrees; the raw local is
+    # (10, 0) at 0. `rest` must carry the SOLVED one.
+    assert abs(values[4] - 12.0) < 1e-3 and abs(values[5] - 3.0) < 1e-3, (
+        f"rest carries {values[4:6]}, not the solved setup pose (12, 3)")
+    assert abs(math.degrees(math.atan2(values[1], values[0])) - 8.4) < 1e-2, (
+        "rest rotation is not the solved one")

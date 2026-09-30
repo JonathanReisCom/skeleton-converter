@@ -44,9 +44,20 @@ if (!attachment) {
   console.error(`no attachment on slot ${slotName}`);
   process.exit(1);
 }
-const count = attachment.worldVerticesLength / 2;
+// RegionAttachment and MeshAttachment do NOT share a computeWorldVertices
+// signature on this runtime — calling the mesh one on a region throws
+// "Cannot create property '0' on number '0'", which is how the armour pieces
+// (all regions) went unmeasured while every mesh passed.
+// A region is always the four corners of its quad, and it does not carry
+// `worldVerticesLength` at all.
+const isRegion = attachment.constructor.name === "RegionAttachment";
+const count = isRegion ? 4 : attachment.worldVerticesLength / 2;
 const world = new Float32Array(count * 2);
-attachment.computeWorldVertices(slot, 0, world.length, world, 0, 2);
+if (isRegion) {
+  attachment.computeWorldVertices(slot, world, 0, 2);
+} else {
+  attachment.computeWorldVertices(slot, 0, world.length, world, 0, 2);
+}
 const out = { name: attachment.name, at: Number(timeRaw), count };
 out.vertices = Array.from(world, (v) => Math.round(v * 1e4) / 1e4);
 console.log(JSON.stringify(out));

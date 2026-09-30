@@ -633,7 +633,13 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         baked = constraints.bake_animation(spine, anim_name, skin=skin)
         baked_bones.update(baked)
         for bone_name, channels in baked.items():
-            bones[bone_name] = channels
+            # MERGE, never replace: the bake solves the constraint-driven
+            # bones' local transforms and returns only the channels it
+            # produces (rotate/translate). Overwriting dropped every other
+            # channel the source carried — the hero's `head-turn` is a
+            # `scale: x=-1` FLIP on the head, so the head stopped turning in
+            # both converted panes while the Spine pane kept turning it.
+            bones[bone_name] = {**bones.get(bone_name, {}), **channels}
         tracks = {}
         for bone_name, props in bones.items():
             setup = next((b for b in spine["bones"] if b["name"] == bone_name), {})

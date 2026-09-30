@@ -23,6 +23,9 @@ import zipfile
 import re
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+from pathlib import Path
+
 from src import bundle
 from src.in_godot import read_godot_skeleton
 from src.in_skelform import read_skeleton as read_skelform
@@ -485,3 +488,21 @@ def test_vertex_morph_reaches_godot_as_a_polygon_track(tmp_path):
         for i in range(min(len(base), len(moved))))
     assert abs(moved_length - 5.0) < 1e-3, (
         f"the morph moved a vertex by {moved_length:.4f}, not 5")
+
+
+def test_godot_pane_frames_with_the_shared_margin():
+    """The Godot pane's fallback fit must use the HUD's own MARGIN.
+
+    The Spine and SkelForm panes take their scale from `hud.fitScale`; the
+    Godot wrapper lives in GDScript and calls the same function through the JS
+    bridge, but its standalone/headless fallback re-states the margin. A
+    hardcoded 1.2 there drew this pane's rig ~2% smaller than the two beside
+    it, and the whole point of the comparison is that the three frame alike.
+    """
+    hud = (ROOT / "src" / "static" / "hud.js").read_text()
+    wrapper = (ROOT / "src" / "godot_preview" / "main.gd").read_text()
+    margin = re.search(r"const MARGIN = ([0-9.]+);", hud)
+    assert margin, "hud.js no longer declares MARGIN"
+    assert f"scale = {margin.group(1)} /" in wrapper, (
+        f"the Godot wrapper's fallback fit does not use the HUD's "
+        f"MARGIN ({margin.group(1)})")

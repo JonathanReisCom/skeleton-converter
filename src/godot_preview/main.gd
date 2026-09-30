@@ -20,6 +20,13 @@ var _js_cam: JavaScriptObject
 var _js_inspect: JavaScriptObject
 var _js_attachments: JavaScriptObject
 var _js_set_attachment: JavaScriptObject
+# The box the camera was fitted to, so the framing report can state the
+# coverage (box * zoom / viewport) the three panes must agree on.
+var _framed_size := Vector2.ZERO
+var _framed_rect := Rect2()
+# The camera THIS pane fitted, not whatever happens to be current: at boot the
+# fit runs before make_current(), and a refit must not depend on that order.
+var _camera: Camera2D
 # Attachment explorer state: Polygon2D name -> node (the converted scene
 # draws each skin attachment as a Polygon2D; visibility = equip toggle).
 var _attachments: Dictionary = {}
@@ -64,6 +71,7 @@ func _ready() -> void:
 	# right of the art and left the character visibly off centre — on X only,
 	# because those bones stick out sideways.
 	var cam := Camera2D.new()
+	_camera = cam
 	var min_p := Vector2(INF, INF)
 	var max_p := Vector2(-INF, -INF)
 	var saw_content := false
@@ -127,18 +135,19 @@ func _ready() -> void:
 			max_p = max_p.max(bone.global_position)
 			saw_content = true
 	if saw_content:
-		var rect := Rect2(min_p, max_p - min_p)
-		cam.position = rect.get_center()
-		var viewport: Vector2 = get_viewport().get_visible_rect().size
-		# Godot's zoom divides the viewport (visible = viewport / zoom); the
-		# Spine camera multiplies it — hence the reciprocal of the fit ratio.
-		cam.zoom = Vector2.ONE * min(
-			viewport.x / max(rect.size.x, 1.0) / 1.2,
-			viewport.y / max(rect.size.y, 1.0) / 1.2)
+		# The box is measured ONCE, on the scene's setup pose: everything else
+		# (the Spine pane's getBounds, the SkelForm pane's vertex box) frames
+		# the setup too, so a box measured on whatever frame is on screen would
+		# disagree with the pane beside it every time the clock moved.
+		_framed_rect = Rect2(min_p, max_p - min_p)
+		_fit_camera()
 	add_child(cam)
 	cam.make_current()
-	if OS.has_feature("web"):
-		_publish_cam_framing()
+	# Reported in EVERY build, not only the web one: the framing is what the
+	# three panes must agree on, and a headless run is the only place the
+	# harness can read it. `_report_cam` guards its own JS publish.
+	get_viewport().size_changed.connect(_on_viewport_resized)
+	_publish_cam_framing()
 
 	_capture_setup_pose()
 
@@ -206,6 +215,45 @@ func _web_inspect(_args: Array) -> void:
 		lines.append("P %s@%s:%s" % [poly.name, String(poly.bones), ",".join(pts)])
 	win.previewInspectData("|".join(lines))
 
+func _on_viewport_resized() -> void:
+	_fit_camera()
+	_publish_cam_framing()
+
+
+func _fit_camera() -> void:
+	# Fitted from the CACHED box and the CURRENT viewport, and re-run whenever
+	# the viewport changes. The browser resizes the canvas after the engine
+	# boots, so fitting once left the camera holding a scale for an aspect the
+	# pane no longer had — the rig came out a few percent smaller on one axis
+	# than on the other, which is what a side-by-side comparison shows first.
+	if _framed_rect.size == Vector2.ZERO:
+		return
+	if _camera == null:
+		return
+	var viewport: Vector2 = get_viewport().get_visible_rect().size
+	_camera.position = _framed_rect.get_center()
+	# The scale comes from the SAME function the Spine and SkelForm panes call
+	# — `hud.fitScale` — through the JS bridge this pane already uses for its
+	# playback protocol, so all three frame the rig identically.
+	# `zoom` IS pixels per rig unit here: the camera divides the viewport by it
+	# (`visible = viewport / zoom`) and hud.fitScale returns exactly that ratio.
+	# Taking the reciprocal — the convention the Spine viewer's own camera uses
+	# — framed the rig at 38% of the pane instead of 85%; the framing report
+	# below caught that before it shipped.
+	var scale := 0.0
+	if OS.has_feature("web"):
+		var js := JavaScriptBridge.get_interface("hud")
+		if js != null:
+			scale = float(js.fitScale(_framed_rect.size.x, _framed_rect.size.y,
+				viewport.x, viewport.y))
+	if scale <= 0.0:
+		# Standalone/headless: the HUD's own formula, same MARGIN (0.85).
+		scale = 0.85 / maxf(_framed_rect.size.x / maxf(viewport.x, 1.0),
+			_framed_rect.size.y / maxf(viewport.y, 1.0))
+	_camera.zoom = Vector2.ONE * scale
+	_framed_size = _framed_rect.size
+
+
 func _publish_cam_framing() -> void:
 	# The browser resizes the canvas AFTER the engine boots, so the boot numbers
 	# are not necessarily the ones that framed the scene — and a viewport that
@@ -216,19 +264,28 @@ func _publish_cam_framing() -> void:
 	_report_cam([])
 
 func _report_cam(_args: Array) -> void:
-	var cam := get_viewport().get_camera_2d()
-	var win := JavaScriptBridge.get_interface("window")
+	var cam := _camera
 	var viewport: Vector2 = get_viewport().get_visible_rect().size
-	var data := "viewport=%s|zoom=%s|center=%s" % [
+	# The framed box rides along: coverage = box * zoom / viewport, which is
+	# what "the three panes frame the rig the same" means as a number. Without
+	# it the report says where the camera looks but not at what size.
+	var framed: Vector2 = _framed_size
+	var data := "viewport=%s|zoom=%s|center=%s|box=%s|coverage=%s" % [
 		viewport,
 		cam.zoom if cam else Vector2.ONE,
-		cam.global_position if cam else Vector2.ZERO]
-	win.previewCamData(data)
-	# Also to the engine console: the JS one is a property on the pane's window,
-	# unreachable from the shell (same-origin iframes still have separate JS
-	# realms) and invisible to the harness. A "the rig is off centre" report has
-	# to be checkable against the numbers the renderer itself is using.
+		cam.global_position if cam else Vector2.ZERO,
+		framed,
+		(framed * (cam.zoom if cam else Vector2.ONE) / viewport)
+			if cam else Vector2.ZERO]
+	# The engine console is the harness's only view of this in a HEADLESS run,
+	# where the bridge has nobody to talk to — publishing first and printing
+	# second meant a null `window` ate the report and nothing came out at all.
+	# Printed first for the same reason: an error in the bridge must not be able
+	# to swallow the number.
 	print("PREVIEW_CAM=", data)
+	if OS.has_feature("web"):
+		var win := JavaScriptBridge.get_interface("window")
+		win.previewCamData(data)
 
 func _publish_attachments(_args: Array) -> void:
 	# Attachment explorer: every skin attachment is a Polygon2D in the

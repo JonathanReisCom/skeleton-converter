@@ -41,7 +41,11 @@ func _init():
 	var player: AnimationPlayer = scene.get_node_or_null("AnimationPlayer")
 	if player == null:
 		print("NOTE no AnimationPlayer")
-	else:
+	elif animation != "-":
+		# "-" asks for the SETUP pose: the scene's own node transforms, before
+		# any animation writes to them. Framing is measured there (the Spine
+		# and SkelForm panes both frame the setup), so comparing a played pose
+		# against a setup box answers the wrong question.
 		player.play(animation)
 		player.seek(sample_time, true)
 		player.pause()  # freeze so the sampled time is exactly sample_time

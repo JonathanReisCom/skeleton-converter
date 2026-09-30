@@ -91,6 +91,17 @@ format).
    (IK, path) that other engines re-derive differently; read the constraint
    targets before concluding.
 
+   **The constraint bake MERGES channels, it does not replace them.** The
+   solver returns the bones a constraint drives with the channels it produces
+   (`rotate`/`translate`); assigning that dict over the source's dropped every
+   other channel the rig carried. The hero's `head-turn` expresses the turn as
+   `scale: x=-1` on the head — a flip, not a rotation — so both converted
+   panes played a rig whose head never turned while the Spine pane turned it.
+   Measured symptom, before the fix: the channel was absent from the model, so
+   no scale track reached Godot and the engine's head linear stayed
+   determinant-positive at every time; after it, `head-turn` t=0.6 gives
+   det = -1.000, and the `.skf` carries `frame 3 → head ScaleX = -1`.
+
    Two gates exist because bones can pass while the skin is wrong:
 
    - **Bone gate** (`compare` / `validate-roundtrip.sh`): samples bone world
@@ -195,6 +206,38 @@ Semantics worth knowing when debugging a frozen compare:
   running the engine headless, not by reading the docs.
 
 ## Attachment explorer (every pane)
+
+**`rest` is the skinning basis, so it must be the frame the polygons are in.**
+Godot draws a skinned polygon as `pose * rest^-1 * point`. A Spine-sourced
+rig's polygons come from the constraint SOLVER's setup, so `rest` has to be
+that solved setup — emitting the raw local applied `solved * raw^-1` on top and
+put the hero's `thigh1`/`shin1`/`foot1` **8–9 units** off (measured engine vs
+runtime: 8.02 / 9.28 / 7.67, and 0.000 after the fix). It also inflated the
+pane's framing box from 330.12 to 338.76 units and moved its centre by 4.3,
+which drew the Godot rig 2.6% smaller than the panes beside it — visible as the
+foot sitting off the grid line. The godot->spine leg keeps its bind pose
+instead: there the bind IS the polygon's frame.
+
+**All three panes frame the rig with the same number** — `hud.fitScale`
+(`src/static/hud.js`, `MARGIN = 0.85`), so a size difference in a comparison
+is the rig's, never the pane's. The Spine and SkelForm viewers call it
+directly; the Godot wrapper calls it through the JS bridge it already uses for
+playback and falls back to the same formula when there is no bridge. Two
+things that broke this:
+
+- **`Camera2D.zoom` IS pixels per rig unit** (the camera divides the viewport
+  by it), so `zoom = fitScale(...)`, not its reciprocal — the reciprocal is the
+  Spine viewer's own convention and framed the rig at 38% of the pane.
+- **Fit again on `size_changed`.** The browser resizes the canvas after the
+  engine boots, so a camera fitted once held a scale for an aspect the pane no
+  longer had; the box is measured once (setup pose, like the other two panes)
+  and only the scale is recomputed.
+
+The wrapper prints the result as `PREVIEW_CAM=` (viewport, zoom, box,
+coverage) in every build, not only the web one — `coverage = box * zoom /
+viewport` is how "the three panes frame alike" becomes a number, and the
+limiting axis must read `0.85`. A headless run is the only place the harness
+can read it, so keep that print unconditional and before the JS publish.
 
 **Inside a compare shell the panes hide their own chrome** — the shell's left
 sidebar is the control surface (tracks, master clock, freeze, grid, and one

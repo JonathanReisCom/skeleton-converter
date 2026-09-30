@@ -110,11 +110,17 @@ def _emit_bones(model):
                 f"bone_angle = {round(node_rot, 6)}",
             ]
         # Godot's Transform2D stores columns: x = (cos, sin), y = (-sin, cos).
-        # rest comes from the model's bind pose when the godot->spine leg
-        # carried one (scenes whose rest differs from the node pose); the
-        # rotation in the rest drives the skinning basis and must NOT be the
-        # node pose's rotation.
-        r_pos, r_rot, r_scale = bone.rest or (
+        # `rest` is the SKINNING BASIS: Godot draws a skinned polygon as
+        # `pose * rest^-1 * point`, so it must be the frame the model's
+        # polygons are expressed in, or the basis applies an extra transform.
+        #   - the godot->spine leg carries a bind pose (`bone.rest`), and its
+        #     polygons were built in exactly that frame, so it stays;
+        #   - a Spine-sourced rig has no bind: its polygons come from the
+        #     constraint SOLVER's setup, so the basis has to be that solved
+        #     setup, not the raw local. Emitting the raw one put the hero's
+        #     thigh1/shin1/foot1 8-9 units off (measured), which also inflated
+        #     the pane's framing box by 8.6 and drew the rig 2.6% smaller.
+        r_pos, r_rot, r_scale = bone.rest or bone.setup_solved or (
             bone.position, bone.rotation_deg, bone.scale)
         r_cos, r_sin = math.cos(math.radians(r_rot)), math.sin(math.radians(r_rot))
         props.append(
@@ -360,6 +366,41 @@ def _resource_id(anim_name: str) -> str:
     return f"Animation_{safe}"
 
 
+# A key's curve describes the segment that STARTS at it (Spine's own layout:
+# the last key of a timeline never carries one). "stepped" is not a bezier —
+# it holds the key's value and jumps at the next key, which is how the hero's
+# `head-turn` flips the head (`scale: x=-1`).
+STEP_EPSILON = 1e-4
+
+
+def _stepped_kind(keys) -> str:
+    """How much of a channel is stepped: "all", "some", or "none"."""
+    segments = [k for k in keys[:-1]]
+    if not segments:
+        return "none"
+    stepped = [getattr(k, "curve", None) == "stepped" for k in segments]
+    if all(stepped):
+        return "all"
+    return "some" if any(stepped) else "none"
+
+
+def _hold_steps(keys, values: list) -> list:
+    """Keys with each stepped segment split into a hold.
+
+    Godot's value tracks carry ONE interp mode for the whole track, so a
+    stepped segment can only be held by doubling it: a linear segment between
+    two equal values IS a hold, and the jump lands on the next key.
+    """
+    out = []
+    for index, key in enumerate(keys):
+        out.append((key.time, values[index]))
+        if index + 1 < len(keys) and getattr(key, "curve", None) == "stepped":
+            hold = keys[index + 1].time - STEP_EPSILON
+            if hold > key.time:
+                out.append((hold, values[index]))
+    return out
+
+
 def _emit_animations(model):
     animation_resources = []
     animation_refs = []
@@ -376,7 +417,14 @@ def _emit_animations(model):
             if props.get("rotate"):
                 keys = props["rotate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}"
-                if any(k.curve for k in keys):
+                kind = _stepped_kind(keys)
+                if kind == "all":
+                    tracks.append(("value", f"{base}:rotation_degrees",
+                                   [(k.time, k.angle) for k in keys], True))
+                elif kind == "some":
+                    tracks.append(("value", f"{base}:rotation_degrees",
+                                   _hold_steps(keys, [k.angle for k in keys])))
+                elif any(k.curve for k in keys):
                     times = [k.time for k in keys]
                     out_h, in_h = _solve_handles(keys, times,
                                                  [k.angle for k in keys])
@@ -389,7 +437,14 @@ def _emit_animations(model):
             if props.get("translate"):
                 keys = props["translate"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}:position"
-                if any(k.curve for k in keys):
+                kind = _stepped_kind(keys)
+                if kind == "all":
+                    tracks.append(("value", base,
+                                   [(k.time, (k.x, k.y)) for k in keys], True))
+                elif kind == "some":
+                    tracks.append(("value", base, _hold_steps(
+                        keys, [(k.x, k.y) for k in keys])))
+                elif any(k.curve for k in keys):
                     for axis in (0, 1):
                         values = [k.x if axis == 0 else k.y for k in keys]
                         times = [k.time for k in keys]
@@ -404,7 +459,15 @@ def _emit_animations(model):
             if props.get("scale"):
                 keys = props["scale"]
                 base = f"Sprite2D/Skeleton2D/{bone_relative}:scale"
-                if any(k.curve for k in keys):
+                kind = _stepped_kind(keys)
+                if kind == "all":
+                    tracks.append(("value", base,
+                                   [(k.time, (k.scale[0], k.scale[1]))
+                                    for k in keys], True))
+                elif kind == "some":
+                    tracks.append(("value", base, _hold_steps(
+                        keys, [(k.scale[0], k.scale[1]) for k in keys])))
+                elif any(k.curve for k in keys):
                     for axis in (0, 1):
                         values = [k.scale[axis] for k in keys]
                         times = [k.time for k in keys]
@@ -508,7 +571,7 @@ def _emit_animations(model):
                         ", ".join(str(p) for p in points),
                         ", ".join(str(t) for t in times)))
             else:
-                _, _path, keys = track
+                _path, keys = track[1], track[2]
                 times = ", ".join(str(t) for t, _ in keys)
                 if _path.endswith(":polygon"):
                     values = ", ".join(
@@ -532,7 +595,10 @@ def _emit_animations(model):
                 # blends false -> true as a float and any non-zero blend reads
                 # as visible, so a prop appears a whole segment early (the
                 # alien's death burst showed at t=0 and its splats at t=1.3).
-                discrete = isinstance(keys[0][1], bool)
+                # A Spine `"stepped"` channel asks for the same mode, and says
+                # so through the track itself.
+                discrete = (track[3] if len(track) > 3
+                            else isinstance(keys[0][1], bool))
                 lines.append(
                     f"tracks/{track_index}/interp = {0 if discrete else 1}")
                 lines.append(f"tracks/{track_index}/loop_wrap = false")

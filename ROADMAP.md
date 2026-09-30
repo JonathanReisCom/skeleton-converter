@@ -139,8 +139,12 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
       tracks or per-axis `:scale:x`/`:scale:y` bezier tracks, and read back.
       Engine-verified on the hero's `run-from fall`: 44 bones x 6 sample times
       agree with the runtime to 1.7e-4 (the residual is the runtime's 10-step
-      bezier table). Victim to keep in mind: `head-turn`'s stepped x=-1 flip now
-      reaches the rig
+      bezier table). `head-turn`'s stepped x=-1 flip was the victim the note
+      warned about: the constraint bake REPLACED the head's channels and the
+      scale went with them, so neither converted pane turned the head. The bake
+      now merges (`{**source, **baked}`), the Godot track is discrete
+      (`interp = 0`, verified: the engine's head linear flips to det = -1.000
+      during 0.1-1.1 s) and the `.skf` carries the same key
 - [ ] Transform and physics constraints are not baked (IK and path are) — see
       `unsupported_constraints()`; the bones they drive keep their animated
       values. Reachability, measured against the local corpora: **transform
@@ -193,15 +197,16 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
       (`FileNotFoundError`), so any rig read without its page — an ordinary
       upload — failed after a successful write. The bundle now moves only what
       exists and reports "no page image found" instead
-- [ ] **The Godot leg scatters multi-bone attachments** (found by the studio's
-      visual comparison, not by a gate): the converted `.tscn` for the `hero`
-      draws the armor pieces apart — on `walk` worse than on `attack` — while
-      the Spine pane of the same rig is coherent, so the model and the Spine
-      leg are right and the `Polygon2D` emission (or its bone binding) is
-      wrong. It is invisible to the numeric gates (bones agree to 4e-5) and to
-      `mesh_parity` (which validates the model, not the `.tscn`), and it is
-      **pre-existing**: the emitted scene is byte-identical to the pre-refactor
-      HEAD. Evidence: `tmp/hero-roundtrip-walk.png`
+- [x] ~~The Godot leg scatters multi-bone attachments~~ — FIXED: it was the
+      skinning basis, not the multi-bone blend. `rest` carried the RAW local
+      while the polygons are built in the constraint solver's SOLVED setup, so
+      Godot applied `solved * raw^-1` on top of every skinned attachment.
+      Measured with the new per-vertex harness (`validation/deform_parity.py`,
+      which now reads regions too): `thigh1`/`shin1`/`foot1` were 8.02 / 9.28 /
+      7.67 units off on `walk` and are **0.000** after the fix; the pane's
+      framing box went from 338.76 to 330.12 units — matching the Spine and
+      SkelForm panes to the digit. Pinned by
+      `tests/test_generated_output.py::test_skinning_basis_matches_the_frame_the_polygons_are_in`
 - [ ] **A native Godot scene can preview almost empty** (`preview_scene`): the
       `hero` demo's raw scene draws a single attachment in the wrapper. The
       wrapper frames authored vertices while a demo rig is posed by its own
