@@ -104,7 +104,8 @@ format).
      equipped/unequipped flags exactly as the runtime would draw). Empty
      violation list = full parity. The round-trip tests run it on the
      synthesized rig, so a skin bug fails CI even though the bones match.
-4. **If FAIL**: read the coordinate contract in [REFERENCE.md](REFERENCE.md) —
+4. **If FAIL**: read the coordinate contract in
+   [README.md](../README.md#the-coordinate-contract) —
    nearly every failure is one of the traps documented there.
 5. **Preview the result** without the Spine Editor — `convert --to spine`
    writes a complete bundle (`<name>.json`, `<name>.atlas`, `<name>.png`, and
@@ -263,6 +264,69 @@ switches the same entries via the metadata — two traps:
 - **Naming collisions.** Entries with the same name in different slots are
   deduplicated at the node level; the slot survives only as metadata.
 
+## Vertex morphes (Spine `deform` → Godot `polygon`)
+
+Spine's per-vertex morph ("FFD") lives **inside `attachments`**, not as a
+top-level `deform` key: `animations.<anim>.attachments.<skin>.<slot>.<entry>.deform`.
+A rig can carry hundreds of keys (hero-pro: 197, across 5 meshes) and it is what
+makes a face look as if it turned — the most visible difference a conversion can
+have and still pass every bone check.
+
+Three things the runtime's own code settles, each of which cost a wrong guess:
+
+- **`offset` counts DEFORM FLOATS, and a weighted mesh's buffer is not its raw
+  layout.** Spine ADDS the key's values to the buffer at `deform[offset …]`. For
+  a plain-pair mesh the buffer *is* the raw array. For a weighted mesh it is the
+  bone entries' `(x, y)` PAIRS, flattened — the bone index and the weight are
+  dropped, so an entry costs 2 floats where the raw costs 4. Measured against the
+  runtime: key `offset: 15` of hero's head morphs vertices 4, 7, 21, 23 and 24
+  under the pair layout, and vertices 1 and 9 under the raw layout. Meshes with
+  ONE entry per vertex (the eyes, the body, hero's whole `crouch`) hide the bug,
+  because there the two indices coincide — only the head, with two entries on
+  some vertices, exposes it.
+- **A delta is a displacement: apply only the bone's LINEAR part, in the model's
+  component order.** Running it through the full affine dragged the bone's
+  translation onto every vertex — the head sat ~250 units from the origin. And
+  the model's convention is `x' = a*x + b*y` (`model.transform`): writing
+  `a*lx + c*ly` transposes the rotation, which left every morphed rig a few
+  units off its own keys.
+- **Both layouts need a weight.** Only registering the weight for weighted meshes
+  left plain-pair meshes multiplying every delta by zero: four of five meshes
+  came out with an all-zero morph and the rig looked untouched.
+
+Godot expresses it as a **`polygon` (`PackedVector2Array`) value track** — the
+engine animates the array and skins whatever it holds. Verified by rendering a
+skinned `Polygon2D` with an animated polygon: 40×40 at t=0, 10×10 at t=0.5,
+exactly the key values. Godot cannot interpolate a packed array, so the writer
+**bakes** the track at `MORPH_BAKE_STEP` (1/60), re-evaluating the polygon on
+each sample through the same bezier sampler the constraint solver uses
+(`src/curves.sample_key`), and keeps the source's own key times verbatim — a
+sample at `0.20000000000000004` leaves a query at `0.2` holding the previous key,
+which showed up as every mesh sitting a step behind at its own key. A key at t=0
+is inserted when the timeline starts later, because Godot holds a value track's
+first key backwards.
+
+**Parity is measured, not assumed** (`validation/deform_parity.py`, which needs
+Godot and the runtime installed beside it): the engine plays the scene and dumps
+its skinned vertices (`validation/dump-skin.gd`, skinning done by Godot itself so
+no matrix convention is re-guessed in Python), the runtime reports
+`computeWorldVertices` (`validation/mesh-vertices.mjs`), and the two are compared
+in skeleton space. Current numbers: hero `attack` body/eyes/mouth **0.000** at
+0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4; hero `crouch` body/eyes/mouth/mantles
+**0.000** at 0, 0.25, 0.5, 0.75, 1.0; goblins `walk` dagger **≤ 0.08**.
+
+**Known limit, not a deform bug:** hero `attack`'s `head` stops at 3.85 units.
+Its worst vertices carry **two bone entries and a zero delta**, so the gap is
+Godot's `Polygon2D` blend, not the morph: Godot computes
+`Σ w·(pose·rest⁻¹)·(node + point)` while Spine computes `Σ w·W(t)·local`, and a
+single point plus a node cannot represent a vertex whose bones have different
+setup transforms. Removing the head's deform entirely drives its error to 0.000,
+which is how the attribution was made.
+
+**SkelForm cannot express it at all**: the runtime has no deform channel and
+`visual.vertices` is static (`constructVerts` only applies binds). Reproducing a
+morph there would mean packing each pose as separate art.
+
 ## Attachment timelines (converted)
 
 A Spine `slots.<slot>.attachment` timeline becomes one discrete boolean
@@ -329,5 +393,6 @@ residual is the runtime's 10-step bezier table, not a conversion error.
 
 The complete coordinate contract (mirroring, animation offset semantics, UV
 spaces, weighted mesh layout, `Transform2D` column order, region quad winding,
-`inherit` mode emulation, bezier baking) is in [REFERENCE.md](REFERENCE.md).
+`inherit` mode emulation, bezier baking) is in
+[README.md](../README.md#the-coordinate-contract).
 Read it before debugging any conversion mismatch.

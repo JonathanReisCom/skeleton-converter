@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+
+from .curves import sample_key
 from pathlib import Path
 
 from .model import Skeleton
@@ -126,6 +128,61 @@ def _emit_bones(model):
             props.append(f'metadata/spine_inherit = "{bone.inherit}"')
         nodes.append({"name": bone.name, "type": "Bone2D", "parent": parent_path, "props": props})
     return nodes
+
+
+# Mesh morphs are baked at this rate. Godot's value tracks HOLD a
+# PackedVector2Array instead of interpolating it, so the runtime's eased motion
+# between the source's keys only survives as extra keys. One per frame keeps the
+# held shape within a frame of the runtime; the ceiling stops a long animation
+# from turning one morph track into thousands of keys.
+MORPH_BAKE_STEP = 1.0 / 60.0
+MORPH_BAKE_MAX = 240
+
+
+def _baked_morph(base: list, morph: list) -> list:
+    """(time, polygon) for a deform track, sampled between the source's keys.
+
+    The runtime interpolates the key VALUES with the segment's curve, so the
+    same curve is sampled here (`src.curves.sample_key`) and the per-vertex
+    deltas blended before the polygon is rebuilt.
+    """
+    times = [key.get("time", 0.0) for key in morph]
+    if len(times) < 2:
+        return [(times[0], _morph_polygon(base, morph, times[0]))]
+    start, end = times[0], times[-1]
+    span = end - start
+    count = min(math.ceil(span / MORPH_BAKE_STEP), MORPH_BAKE_MAX) if span > 0 else 0
+    # The grid is rounded AND the source's own key times are kept verbatim: a
+    # track is discrete, so a sample at 0.20000000000000004 leaves a query at
+    # 0.2 holding the previous key, and every mesh came out a step behind at
+    # its own key.
+    samples = {round(start + span * index / count, 6) for index in range(count)}
+    samples.update(round(time, 6) for time in times)
+    return [(time, _morph_polygon(base, morph, time)) for time in sorted(samples)]
+
+
+def _morph_polygon(base: list, morph: list, time: float) -> list:
+    """The polygon a deform track shows at ``time``."""
+    index = len(morph) - 2
+    for candidate in range(1, len(morph)):
+        if time <= morph[candidate].get("time", 0.0):
+            index = candidate - 1
+            break
+    start = morph[index].get("time", 0.0)
+    end = morph[index + 1].get("time", 0.0)
+    # Curve on the STARTING key, which is where Spine writes it: the source's
+    # first key carries one even when a later key eases too.
+    ratio = sample_key(
+        [{"time": start, "curve": morph[index].get("curve"), "value": 0.0},
+         {"time": end, "value": 1.0}], time, "value", 0.0)
+    first, second = morph[index].get("delta") or [], morph[index + 1].get("delta") or []
+    moved = []
+    for i, point in enumerate(base):
+        ax, ay = first[i] if i < len(first) else (0.0, 0.0)
+        bx, by = second[i] if i < len(second) else (0.0, 0.0)
+        moved.append((point[0] + ax + (bx - ax) * ratio,
+                      point[1] + ay + (by - ay) * ratio))
+    return moved
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +418,36 @@ def _emit_animations(model):
                     tracks.append(("value", base,
                                    [(k.time, (k.scale[0], k.scale[1]))
                                     for k in keys]))
+        # Vertex morphs (Spine `deform`). Godot animates the polygon array
+        # itself and skins whatever it holds — verified by rendering a skinned
+        # `Polygon2D` with an animated `polygon`: 40x40 at t=0 and 10x10 at
+        # t=0.5, exactly the key values. Written as a discrete track
+        # (`interp = 0`) because Godot cannot interpolate a PackedVector2Array:
+        # a value track over an array snaps to the previous key. The runtime
+        # eases between the source's keys instead, so the track is BAKED at
+        # `MORPH_BAKE_STEP` — the polygon is re-evaluated on each sample through
+        # the same bezier sampler the constraint solver uses, and the discrete
+        # track then follows the runtime to within one step.
+        node_names = {id(att): node_name
+                      for att, node_name in _attachment_node_names(model)}
+        for attachment in model.attachments:
+            morph = (attachment.deform or {}).get(anim_name)
+            if not morph:
+                continue
+            node_name = node_names.get(id(attachment))
+            if node_name is None:
+                continue
+            base = [(p[0], p[1]) for p in attachment.polygon]
+            entries = _baked_morph(base, morph)
+            # Godot holds a value track's FIRST key backwards; without a key at
+            # zero the mesh would wear the first morph pose before it starts.
+            if entries and entries[0][0] > 0.0:
+                entries.insert(0, (0.0, base))
+            if entries:
+                tracks.append(("polygon",
+                               f"Sprite2D/Polygons/{node_name}:polygon",
+                               entries))
+
         # Attachment timelines: a slot's drawn attachment changes over time.
         # Emitted as one boolean ``visible`` track per Polygon2D of that slot —
         # Godot's AnimationPlayer drives polygon visibility directly, which is
@@ -423,7 +510,12 @@ def _emit_animations(model):
             else:
                 _, _path, keys = track
                 times = ", ".join(str(t) for t, _ in keys)
-                if _path.endswith("rotation_degrees"):
+                if _path.endswith(":polygon"):
+                    values = ", ".join(
+                        "PackedVector2Array(%s)" % ", ".join(
+                            f"{round(x, 6)}, {round(y, 6)}" for x, y in points)
+                        for _, points in keys)
+                elif _path.endswith("rotation_degrees"):
                     values = ", ".join(str(round(v, 6)) for _, v in keys)
                 elif isinstance(keys[0][1], bool):
                     # Attachment visibility: a discrete boolean track.

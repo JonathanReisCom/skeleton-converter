@@ -179,6 +179,79 @@ def _curve_two_axis(curve, map_x, map_y):
     return tuple(out)
 
 
+def _deform_pairs(raw, offset: int, values, weighted: bool, host: str):
+    """A deform key -> {vertex: [(dx, dy, bone_index, weight), ...]}.
+
+    One entry PER BONE, because a weighted vertex has several: two entries'
+    deltas summed into one and transformed by the last bone's linear put the
+    head 6.5 units off at its own key, and 20 units at the peak in between.
+
+    Spine accumulates a deform into the mesh's RAW float list: the key's values
+    are ADDED to the floats at ``deform[offset …]``. Measured end to end against
+    the runtime's own `computeWorldVertices` (`validation/mesh-vertices.mjs`): for
+    the unweighted `eyes` at
+    `attack` t=0.2, skinning ``raw + values`` with the engine's bone matrices
+    reproduces the runtime exactly (error 0.000), while skinning the key's
+    values alone is off by 81 units. A standalone probe that measured the key
+    against a *fixed* pose claimed the opposite — copy instead of add — because
+    it never applied the bone animation, so both sides shared one pose; it was
+    deleted rather than kept as a tool that argues for the wrong rule.
+    ``offset`` counts FLOATS, not vertices — reading it
+    as a vertex index is how a 28 vertex head ended up with a deform that
+    "touched" index 44.
+
+    Walking the raw layout is the only way to know which (x, y) float belongs to
+    which vertex and which bone entry carries it, because for a weighted mesh
+    every vertex's position is the weighted sum of its bone entries' locals.
+    """
+    entries: dict[int, tuple] = {}
+    if weighted:
+        cursor = 0
+        vertex = 0
+        # The deform buffer of a weighted mesh is the bone entries' (x, y)
+        # PAIRS, flattened: the bone index and the weight are dropped, so
+        # `offset` counts 2 floats per entry, not the 4 the raw layout uses.
+        # Reading it against the raw indices (the obvious-looking choice) is
+        # how the hero's head ended up morphing vertices 1 and 9 while the
+        # runtime morphed 4, 7, 21, 23 and 24. Single-entry meshes — the eyes,
+        # the body — hide the bug, because there the pair index equals the raw
+        # index.
+        pair = 0
+        while cursor < len(raw):
+            bone_count = int(raw[cursor])
+            cursor += 1
+            for _ in range(bone_count):
+                bone_idx = int(raw[cursor + 0])
+                weight = float(raw[cursor + 3])
+                entries[pair] = (vertex, 0, bone_idx, weight)
+                entries[pair + 1] = (vertex, 1, bone_idx, weight)
+                pair += 2
+                cursor += 4
+            vertex += 1
+    else:
+        for float_index in range(0, len(raw)):
+            entries[float_index] = (float_index // 2, float_index % 2, -1, 1.0)
+
+    pairs: dict[tuple, list] = {}
+    for step, value in enumerate(values):
+        index = offset + step
+        entry = entries.get(index)
+        if entry is None:
+            continue
+        vertex, axis, bone_idx, weight = entry
+        # The weight travels with the entry: leaving it at zero for a
+        # plain-pair mesh multiplied every delta by nothing, which is why four
+        # of five meshes came out with an all-zero morph and only the weighted
+        # one moved.
+        pairs.setdefault((vertex, bone_idx, weight), [0.0, 0.0])[axis] += float(value)
+    touched: dict[int, list] = {}
+    for (vertex, bone_idx, weight), (dx, dy) in pairs.items():
+        if dx == 0.0 and dy == 0.0:
+            continue
+        touched.setdefault(vertex, []).append((dx, dy, bone_idx, weight))
+    return touched
+
+
 def read_skeleton(json_path: str, atlas_path: str | None = None,
                   skin: str | None = None) -> Skeleton:
     """Read Spine JSON + optional atlas into the canonical model (Godot space).
@@ -377,6 +450,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             weights_by_bone[host] = {i: 1.0 for i in range(4)}
         elif bones or (vertices and isinstance(vertices[0], (int, float))
                        and int(vertices[0]) >= 1 and len(uvs) // 2 != len(vertices) // 2):
+            weighted_mesh = True
             # Weighted mesh. Spine 4.2 writes the `bones` key only when the
             # attachment defines its own weight list; a mesh without it still
             # carries weighted vertices ([boneCount, (idx, x, y, w)...]) — the
@@ -413,6 +487,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
                 else:
                     uv_points.append([uvs[uv_index] * width, uvs[uv_index + 1] * height])
         else:
+            weighted_mesh = False
             # Unweighted mesh: vertices are in the host bone's local space.
             bone_world = world.get(host, (1, 0, 0, 1, 0, 0))
             for index in range(0, len(vertices) - 1, 2):
@@ -446,6 +521,54 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
         anchor_world = world.get(anchor, (1, 0, 0, 1, 0, 0))
         # spine world is y-up; the Godot node position is y-down — mirror it.
         node_pos = (anchor_world[4], -anchor_world[5])
+
+        # ---- deform: Spine's per-vertex morph, per animation.
+        #
+        # The keys live inside `attachments.<skin>.<slot>.<entry>.deform`, and
+        # the runtime applies them to the mesh's raw floats (see
+        # `_deform_pairs`). A touched float is one bone entry's local x or y, so
+        # its effect on the vertex's world position is that bone's world applied
+        # to the delta, weighted — computed here, in the space `polygon` is
+        # about to be written in, so a writer can add it straight on.
+        deform_tracks: dict = {}
+        for anim_name in spine.get("animations", {}):
+            keys = ((((spine["animations"][anim_name].get("attachments") or {})
+                      .get(skin or "default", {}) or {}).get(slot_name) or {})
+                    .get(entry_name) or {}).get("deform") or []
+            if not keys:
+                continue
+            tracks = []
+            for key in keys:
+                touched = _deform_pairs(vertices, key.get("offset", 0),
+                                        key.get("vertices") or [],
+                                        weighted_mesh, host)
+                delta = []
+                for vertex in range(len(world_points)):
+                    dx = dy = 0.0
+                    for lx, ly, bone_idx, weight in touched.get(vertex, ()):
+                        bone_name = (spine["bones"][bone_idx]["name"]
+                                     if bone_idx is not None and bone_idx >= 0
+                                     else host)
+                        # Only the LINEAR part of the bone's world: a delta is
+                        # a displacement, and dragging the bone's translation
+                        # along added the head's own ~250 units of offset to
+                        # every vertex. Its rotation and scale still apply,
+                        # because the local the delta lands on is expressed in
+                        # that bone's frame. The component order follows the
+                        # model's convention (`x' = a*x + b*y`, see
+                        # `model.transform`): writing `a*lx + c*ly` here
+                        # transposed the rotation and left every morphed rig a
+                        # few units off its own keys.
+                        (a, b2, c, d, _tx, _ty) = world.get(
+                            bone_name, (1, 0, 0, 1, 0, 0))
+                        dx += (a * lx + b2 * ly) * weight
+                        dy += (c * lx + d * ly) * weight
+                    # Mirrored once, exactly like the polygon below.
+                    delta.append((dx, -dy))
+                tracks.append({"time": key.get("time", 0.0),
+                               "curve": key.get("curve"), "delta": delta})
+            if tracks:
+                deform_tracks[anim_name] = tracks
         model.attachments.append(Attachment(
             # Keep the skin entry's exact case: the viewer lists attachment
             # names as-is, and options must match the source's spelling.
@@ -495,6 +618,7 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
             and host not in inactive,
             uv_rotation=int(region.get("degrees", 0) or 0) if region else 0,
             page=region["page"] if region else "",
+            deform=deform_tracks or None,
         ))
 
     # ---- animations: Spine offsets → Godot absolute values

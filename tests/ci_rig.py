@@ -96,6 +96,15 @@ def spine_rig() -> dict:
                 },
                 "slots": {"arm": {"attachment": [{"time": 0.0,
                                                   "name": "arm-glove"}]}},
+                # Vertex morph. `offset` counts FLOATS into the mesh's raw list
+                # (the runtime's DeformTimeline copies the values there), so
+                # offset 2 is vertex 1's x and y. The delta's LENGTH is what a
+                # test can assert without knowing the bone's rotation: the
+                # writer must carry it through unchanged.
+                "attachments": {"default": {"arm": {"arm-glove": {"deform": [
+                    {"time": 0.0, "offset": 0, "vertices": [0.0, 0.0]},
+                    {"time": 0.5, "offset": 2, "vertices": [3.0, 4.0]},
+                ]}}}},
             },
         },
     }

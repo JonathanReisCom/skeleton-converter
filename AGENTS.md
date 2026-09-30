@@ -313,6 +313,28 @@ node validation/constraint-reference.mjs <rig>.json <rig>.atlas [anim] [time]
 `tests/test_constraints.py` pins the solver to runtime-produced numbers, so a
 drift fails CI without needing the Spine rig.
 
+### Rule: a mesh morph is verified against the engine, not against the file
+
+The `deform` channel (Spine's vertex morph) is the one place where a conversion
+can look right in the file and wrong on screen: the writer bakes it into a
+`polygon` value track, and the only way to know it matches is to have **Godot
+skin the scene** and compare its vertices with `computeWorldVertices`:
+
+```bash
+python3 validation/deform_parity.py <rig>.json <rig>.atlas <animation> \
+    --times 0,0.1,0.2 --meshes body,eyes,slot/mesh
+```
+
+Godot reports the skinned vertices itself (`validation/dump-skin.gd`), so no
+matrix convention is re-guessed in Python — every attempt to redo that math by
+hand lost a round to one. Note that `Polygon2D` packs its bindings into a single
+`bones` property (`[path, weights-per-vertex, path, ...]`); there is no
+`weights` property, and touching it aborts a `.gd` script before `quit()`, which
+leaves headless Godot idling forever instead of failing.
+
+`tests/test_mesh_parity.py` pins the deform's offset layout, which is where the
+morph silently morphs the wrong vertices.
+
 ### Rule: a region quad needs its faces as soon as it becomes geometry
 
 Spine writes `triangles` for MESH attachments only; a region attachment is a

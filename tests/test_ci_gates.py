@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import zipfile
+import re
 from pathlib import Path
 
 from src import bundle
@@ -437,3 +438,50 @@ def test_mesh_parity_gate_catches_a_corrupted_vertex(tmp_path):
 
     violations = mesh_parity(str(json_path), atlas, model)
     assert violations, "a 1-unit vertex error went undetected"
+
+
+def test_vertex_morph_reaches_godot_as_a_polygon_track(tmp_path):
+    """A Spine `deform` becomes an animatable `polygon` array in the scene.
+
+    The morph is per vertex and lives inside `attachments`; a conversion that
+    drops it passes every bone check and still loses the face. The assert is the
+    DELTA'S LENGTH, which the bone's rotation and scale cannot change: the
+    fixture moves one vertex by (3, 4), so the emitted key must sit 5 units away
+    from the base polygon at that vertex. A writer that swallows the delta (a
+    zero weight, an offset read as a vertex index) leaves that length at zero.
+    """
+    json_path = write_spine_export(tmp_path)
+    model = read_skeleton(str(json_path), str(tmp_path / f"{STEM}.atlas"))
+
+    glove = next(att for att in model.attachments if att.name == "arm-glove")
+    assert (glove.deform or {}).get("idle"), "the fixture's morph did not survive reading"
+
+    out = tmp_path / "godot"
+    write_godot_scene(model, str(out / f"{STEM}.tscn"),
+                      str(tmp_path / PAGE))
+    text = (out / f"{STEM}.tscn").read_text()
+
+    at = text.find("arm-glove:polygon")
+    assert at >= 0, "no polygon track was written for the morphed mesh"
+    # Scan forward from the track's own path: the FIRST keys block in the file
+    # belongs to another track, and matching it made this test read a Vector2
+    # track's values. The window runs to the end of the file because a baked
+    # morph track is as long as its animation (one key per frame), and a fixed
+    # window dropped the closing brace and read no keys at all.
+    block = text[at:]
+    keys = re.search(r'"times": PackedFloat32Array\(([^)]*)\)'
+                     r'[\s\S]*?"values": \[(.*?)\]\n\}', block)
+    assert keys, "the polygon track carries no keys"
+    times = [float(x) for x in keys.group(1).split(",")]
+    arrays = re.findall(r"PackedVector2Array\(([^)]*)\)", keys.group(2))
+    assert len(times) == len(arrays) >= 2, (times, arrays)
+
+    points = [[float(v) for v in a.split(",")] for a in arrays]
+    pairs = [[(p[i], p[i + 1]) for i in range(0, len(p), 2)] for p in points]
+    base = pairs[times.index(min(times))]
+    moved = pairs[times.index(max(times))]
+    moved_length = max(
+        ((moved[i][0] - base[i][0]) ** 2 + (moved[i][1] - base[i][1]) ** 2) ** 0.5
+        for i in range(min(len(base), len(moved))))
+    assert abs(moved_length - 5.0) < 1e-3, (
+        f"the morph moved a vertex by {moved_length:.4f}, not 5")

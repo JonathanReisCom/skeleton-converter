@@ -269,6 +269,20 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
 
 ### Godot side
 
+- [x] ~~Spine `deform` (vertex morph) parity~~ — DONE: the morph reaches Godot as
+      a baked `polygon` value track and matches the runtime exactly. Measured with
+      `validation/deform_parity.py` (Godot plays the scene and dumps its own
+      skinned vertices; `computeWorldVertices` is the reference): hero `attack`
+      body/eyes/mouth **0.000** at 0/0.05/0.1/0.15/0.2/0.3/0.4, hero `crouch`
+      body/eyes/mouth/mantles **0.000** at 0/0.25/0.5/0.75/1.0, goblins `walk`
+      dagger **≤ 0.08**. Three bugs died on the way: the deform buffer of a
+      WEIGHTED mesh is the bone entries' `(x, y)` pairs (not the raw 4-float
+      layout), the bone's linear part must be applied in the model's component
+      order, and a discrete track needs its sample times to be the source's own
+      key times. One gap stays and is NOT the morph: hero `attack`'s `head` sits
+      3.85 units off, on vertices with two bone entries and a zero delta —
+      Godot's `Polygon2D` blend cannot express a vertex whose bones have
+      different setup transforms; deleting the head's deform drives it to 0.000
 - [ ] Mesh deformation tracks (per-vertex animation from `Polygon2D`) —
       BLOCKED ON DATA: no qualified Godot sample animates a `polygon` /
       `internal_vertex_count` track, so there is nothing to compare against

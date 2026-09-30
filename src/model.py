@@ -198,6 +198,12 @@ class Attachment:
     # these to state vertices in the bind bones' frame; recomputing them would
     # invert the wrong matrix and rotate the whole rig.
     bind_worlds: dict | None = None
+    # Per-animation vertex morph (Spine's `deform`): animation name -> keys,
+    # each `{time, curve, delta}`, where `delta` is one (dx, dy) per vertex in
+    # the SAME local space as ``polygon``. A target that can animate its mesh
+    # vertices (Godot's `Polygon2D.polygon`) adds it to the polygon per key; a
+    # target with no such channel (SkelForm) cannot express it at all.
+    deform: dict | None = None
 
 
 @dataclass
