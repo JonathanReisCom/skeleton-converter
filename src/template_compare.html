@@ -6,6 +6,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@700&family=Roboto:wght@400;500;700&display=swap">
+<!-- The sidebar mounts the same speed control a pane's HUD does, from the same
+     ladder: two copies of "what 2x means" would be two answers to a question
+     the comparison depends on. Loaded before the page's own styles so the
+     shell's variables and layout win over the pane HUD's defaults. -->
+<link rel="stylesheet" href="hud.css">
+<script src="hud.js"></script>
 <style>
   :root {
     /* The stage is the player: black, quadrant, four equal cells. Everything
@@ -212,6 +218,7 @@
   <button class="ctl" id="gridbtn" title="Toggle the alignment grid over every pane">
     Grid <span class="value"></span>
   </button>
+  <div class="speed" id="speed"></div>
 
   <div class="label">Animations</div>
   <div id="tracks"><span class="waiting">loading…</span></div>
@@ -456,9 +463,11 @@ Promise.all(ready).then((ws) => {
     b.onclick = () => play(name, b);
     tracksBox.appendChild(b);
   });
-  // The panes autoplay their own first animation, so the row starts on the
-  // same one: a control surface showing nothing playing while the rig moves is
-  // a control surface you stop trusting.
+  // The panes autoplay their own first animation, so the shell starts on the
+  // same one — and starting is the point: with no clock running every pane
+  // free-runs, and three real-time clocks with different phases and frame
+  // rates read as three different speeds. play() also seeks them all to the
+  // same t, so the first compared frame is already aligned.
   const playing = frames.map((f) => {
     try {
       const active = f.iframe.contentDocument
@@ -469,11 +478,7 @@ Promise.all(ready).then((ws) => {
   if (playing) {
     const button = [...tracksBox.querySelectorAll("button")]
       .find(b => b.textContent === playing);
-    if (button) {
-      currentName = playing;
-      clearActive();
-      button.classList.add("active");
-    }
+    if (button) play(playing, button);
   }
   // Pane HUD buttons drive the shell too: clicking a track inside either
   // pane switches everything (row + other pane) so no pane can end
@@ -499,7 +504,25 @@ function clearActive() {
 // playback drifts and every instant shows different poses. The shell owns
 // the time: it seeks BOTH panes to the same t every animation frame, making
 // the comparison deterministic instead of a race between two clocks.
-let masterClock = null;   // { name, start }
+//
+// `base` is the animation time the clock started from, so the speed control
+// can re-anchor mid-playback (base = where we are now) instead of rebuilding
+// the start — which would jump the rig forward by whatever it had played.
+let masterClock = null;   // { name, start, base }
+let speedValue = 1;
+function clockTime() {
+  return masterClock.base
+    + (performance.now() - masterClock.start) / 1000 * speedValue;
+}
+
+// One control, one ladder (hud.js owns it), driving the same clock every pane
+// is seeked from — so a slow pass over a jump stays frame-aligned across panes
+// by construction, not by three runtimes agreeing.
+hud.speedRow(document.getElementById("speed"), (value) => {
+  if (masterClock) masterClock = { name: masterClock.name, start: performance.now(), base: clockTime() };
+  speedValue = value;
+}, 1);
+
 function seekAll(name, t) {
   frames.forEach((f, i) => {
     if (!paneAlive(i)) return;  // a pane with no handles cannot be seeked
@@ -512,8 +535,7 @@ function seekAll(name, t) {
 
 function tickMaster() {
   if (masterClock === null || frozen) { masterClock = null; return; }
-  const t = (performance.now() - masterClock.start) / 1000;
-  seekAll(masterClock.name, t);
+  seekAll(masterClock.name, clockTime());
   requestAnimationFrame(tickMaster);
 }
 
@@ -544,7 +566,7 @@ function play(name, button) {
   // Frozen: sample the NEW animation at the current freeze time — seeking
   // to 0.0 would show the setup pose on one pane and mid-stride on the
   // other (the exact "head/hands wrong, feet fine" mismatch).
-  masterClock = { name, start: performance.now() - (frozen ? freezeTime : 0.0) * 1000 };
+  masterClock = { name, start: performance.now(), base: frozen ? freezeTime : 0.0 };
   seekAll(name, frozen ? freezeTime : 0.0);
   if (!frozen) requestAnimationFrame(tickMaster);
 }
@@ -585,13 +607,11 @@ document.getElementById("freezer").onclick = () => {
     // advances between the seek and the next call (the Spine pane stayed
     // still while Godot kept walking).
     const deadClock = masterClock;
+    // Read the time BEFORE dropping the clock: clockTime() needs it, and the
+    // clock has to die before the next rAF fires.
+    const at = deadClock ? clockTime() : freezeTime + 0.3;
     masterClock = null;
-    if (deadClock) {
-      // freezing mid-playback: capture the current master time
-      freezeTime = Math.round((performance.now() - deadClock.start) / 1000 * 10) / 10;
-    } else {
-      freezeTime = Math.round((freezeTime + 0.3) * 10) / 10;
-    }
+    freezeTime = Math.round(at * 10) / 10;
     tval.textContent = "t=" + freezeTime.toFixed(1);
     // Let the in-flight frame drain, then freeze once, deterministically.
     requestAnimationFrame(() => {
@@ -600,7 +620,7 @@ document.getElementById("freezer").onclick = () => {
     return;
   }
   // resume: restart the master clock from the frozen time
-  masterClock = { name, start: performance.now() - freezeTime * 1000 };
+  masterClock = { name, start: performance.now(), base: freezeTime };
   requestAnimationFrame(tickMaster);
 };
 </script>

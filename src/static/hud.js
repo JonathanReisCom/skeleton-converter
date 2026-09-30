@@ -46,6 +46,55 @@ window.hud = (() => {
     return node;
   }
 
+  // Playback rates the speed control steps through. Coarse on purpose: the
+  // shortest clip in a character rig is a couple of tenths of a second, and a
+  // 0.05 step is invisible on it while making the ladder a hunt.
+  const SPEEDS = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 4];
+
+  // Playback speed: one factor multiplying the time a runtime advances. Only
+  // the row, the ladder, and the readout live here — the arithmetic stays in
+  // the viewer, because the three runtimes scale differently (Spine's
+  // AnimationState.timeScale, Godot's AnimationPlayer.speed_scale, and a clock
+  // the SkelForm viewer has to drive itself). Sharing the ladder is the point:
+  // "2x" has to mean the same number in every pane, or the comparison lies.
+  //
+  // `container` is the element to fill, so a pane's HUD and the shell's
+  // sidebar mount the same control without either owning a copy of it.
+  function speedRow(container, onPick, initial) {
+    let index = SPEEDS.indexOf(initial);
+    if (index < 0) index = SPEEDS.indexOf(1);
+    const minus = el("button", null, "−");
+    const readout = el("b", null, "");
+    const plus = el("button", null, "+");
+    const show = () => { readout.textContent = SPEEDS[index] + "×"; };
+    const step = (delta) => {
+      index = Math.min(SPEEDS.length - 1, Math.max(0, index + delta));
+      show();
+      if (onPick) onPick(SPEEDS[index]);
+    };
+    minus.onclick = () => step(-1);
+    plus.onclick = () => step(1);
+    // Clicking the number is the way back to normal: the ladder is short, and
+    // hunting for 1x between 0.75 and 1.5 is a worse control than a reset.
+    readout.onclick = () => {
+      index = SPEEDS.indexOf(1);
+      show();
+      if (onPick) onPick(1);
+    };
+    container.classList.add("speed");
+    container.title = "Playback speed: multiplies the clock every pane advances";
+    minus.title = "Slower";
+    plus.title = "Faster";
+    readout.title = "Back to normal speed";
+    container.append(minus, readout, plus);
+    show();
+    return { value: () => SPEEDS[index] };
+  }
+
+  function speed(nodes, onPick, initial) {
+    return speedRow(nodes.speed, onPick, initial);
+  }
+
   // Builds the pane chrome and returns its nodes. Everything else in this file
   // takes that object, so a viewer never queries the DOM for its own HUD.
   function mount({ title, note }) {
@@ -55,10 +104,11 @@ window.hud = (() => {
     titleRow.appendChild(titleTag);
     const noteRow = el("div", "note", note || "");
     const tracks = el("div", "tracks");
+    const speed = el("div", "speed");
     const error = el("div", "error");
-    box.append(titleRow, noteRow, tracks, error);
+    box.append(titleRow, noteRow, tracks, speed, error);
     document.body.appendChild(box);
-    const nodes = { box, title: titleTag, note: noteRow, tracks, error };
+    const nodes = { box, title: titleTag, note: noteRow, tracks, speed, error };
     // The pane's kind is reported the same way in every viewer, so a compare
     // shell can type a pane by what it says it is when the folder name lies.
     box.dataset.kind = title || "";
@@ -155,5 +205,5 @@ window.hud = (() => {
   }
 
   return { fitScale, mount, setNote, tracks, mark, fail, watchErrors,
-           explorer, explorerRows };
+           explorer, explorerRows, speed, speedRow };
 })();

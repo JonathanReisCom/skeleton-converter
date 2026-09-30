@@ -33,15 +33,27 @@
 .hud .title b { font-weight: 500; }
 .hud .note { margin-top: 6px; font: 400 12px/1.5 var(--mono); color: var(--muted); }
 .hud .tracks { margin-top: 10px; white-space: nowrap; }
-.hud button {
+.hud button, .speed button {
   font: 500 13px var(--ui); margin: 0 6px 6px 0; padding: 7px 13px;
   background: var(--chip); color: var(--text); border: 0;
   border-radius: var(--radius-sm); cursor: pointer;
   transition: background .12s, color .12s;
 }
-.hud button:hover { background: var(--hover); }
-.hud button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hud button:hover, .speed button:hover { background: var(--hover); }
+.hud button:focus-visible, .speed button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .hud button.active { background: var(--text); color: #0f0f0f; font-weight: 500; }
+
+/* Playback speed: two steps and a readout. The readout is clickable and takes
+   the column back to 1x — the ladder is short and hunting for it between 0.75
+   and 1.5 is a worse control. Mounted by the pane HUDs and by the compare
+   shell's sidebar, both through hud.speedRow, so the ladder is one list. */
+.speed { margin-top: 10px; display: flex; align-items: center; gap: 6px; }
+.speed button { margin: 0; padding: 6px 11px; line-height: 1; }
+.speed b {
+  font: 500 13px/1 var(--mono); min-width: 44px; text-align: center;
+  color: var(--text); cursor: pointer;
+}
+.speed b:hover { color: var(--accent); }
 .hud .error { margin-top: 8px; max-width: 62ch; color: #ff9b9b;
               font: 400 12px/1.6 var(--mono); white-space: pre-wrap; }
 

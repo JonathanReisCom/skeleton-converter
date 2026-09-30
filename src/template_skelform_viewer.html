@@ -174,22 +174,56 @@ window.previewPlay = function (name) {
   skfc.animTime = 0;
   skfc.playing = false;
   hud.mark(nodes, name);
+  // Standalone, a click IS a play, so take the clock back. Embedded, the
+  // shell's master clock is the only clock and drives this pane through seek.
+  if (window.self === window.top) startPump(name);
 };
 
 window.previewFreeze = function (name, t) {
   if (!skfc) return;
   select(name);
+  // Wrap by this animation's own duration. A raw t past the end is a trap the
+  // other two runtimes answer differently (Godot holds the last key, Spine
+  // cycles), and the shell's clock runs for minutes — so the wrap belongs
+  // here, where the duration is the file's own number.
+  const anim = skfc.armature.animations[skfc.selectedAnim];
+  const last = anim && anim.keyframes.length
+    ? anim.keyframes[anim.keyframes.length - 1].frame : 0;
+  const duration = last > 0 && anim.fps ? last / anim.fps : 0;
   skfc.playing = false;
-  skfc.animTime = Math.max(0, t) * 1000;
+  skfc.animTime = Math.max(0, duration > 0 ? t % duration : t) * 1000;
   hud.mark(nodes, name);
 };
 
-// Opened standalone (a bundle's index.html): drive it from its own clock, so
-// the file is watchable without the comparison shell.
-window.previewAutoplay = function () {
-  if (!skfc) return;
-  skfc.animTime = 0;
-  skfc.playing = true;
+// Opened standalone (a bundle's index.html) the pane owns its clock. api.js
+// advances animTime by the real delta and exposes no scale, so t is integrated
+// here — the same seek the comparison shell drives, one code path, so play,
+// freeze and speed read the same number in both surfaces. Cost of not having a
+// scale: the runtime's sub-frame smoothing is bypassed, exactly as it already
+// is whenever the shell seeks this pane.
+let speedValue = 1;
+let playName = null, playT = 0, playLast = 0, playRAF = 0;
+function pump(now) {
+  playRAF = 0;
+  if (!skfc || playName === null) return;
+  // Speed changes mid-flight are applied to the interval, never to playT, so
+  // stepping 1x -> 2x does not jump the rig forward by what it already played.
+  playT += (now - playLast) / 1000 * speedValue;
+  playLast = now;
+  window.previewFreeze(playName, playT);
+  playRAF = requestAnimationFrame(pump);
+}
+function startPump(name) {
+  playName = name;
+  playT = 0;
+  playLast = performance.now();
+  if (!playRAF) playRAF = requestAnimationFrame(pump);
+}
+hud.speed(nodes, (value) => { speedValue = value; }, 1);
+
+window.previewAutoplay = function (name) {
+  if (!skfc || window.self !== window.top) return;
+  startPump(name);
 };
 
 // api.js's skfReadFile declares its page counter INSIDE the member loop
@@ -242,9 +276,10 @@ async function start() {
     window.visuals = skfc.armature.visuals;
     const animations = skfc.armature.animations || [];
     animations.forEach((animation, i) => index.set(animation.name, i));
+    const defaultAnim = animations[0] ? animations[0].name : null;
     hud.tracks(nodes, animations.map((a) => a.name), (name) => {
       window.previewPlay(name);
-    }, animations[0] ? animations[0].name : null);
+    }, defaultAnim);
     // Frame AFTER the runtime has placed the vertices: constructVerts runs per
     // frame and leaves every vert at its bind bone's world, which is the box
     // to frame. Measuring before the first frame framed the STORED local
@@ -292,7 +327,7 @@ async function start() {
     // Same handle the Spine pane publishes (window.__state): the comparison
     // shell and the verification probes read the live canvas state here.
     window.__skelform = { canvases: skfCanvases, get skfc() { return skfc; } };
-    window.previewAutoplay();
+    window.previewAutoplay(defaultAnim);
   } catch (error) {
     hud.fail(nodes, "cannot play " + SKF_URL + ": "
       + (error && error.message ? error.message : error));

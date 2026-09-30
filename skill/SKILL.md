@@ -148,6 +148,10 @@ and/or Spine WebGL — any mix) and adds a shared control bar:
   playback drifts. The shell owns the time and seeks BOTH panes to the same
   `t` every animation frame — deterministic comparison, not a race.
 - **Freeze control**: one button freezes all panes at the same time (`t=`).
+- **Playback speed**: one control multiplying the clock every pane is seeked
+  from. Because the panes do not own their clocks while compared, a single
+  factor keeps them frame-aligned — three runtimes each scaling their own delta
+  would be three answers to "how fast".
 - **Shared track buttons**: switching the animation switches both panes; the
   panes' own HUD buttons are bridged so no pane can end up on a different
   animation from the rest.
@@ -165,6 +169,13 @@ Semantics worth knowing when debugging a frozen compare:
 - **Zero-duration/one-shot animations hold the last key** — no loop-wrap
   interpolation. A pose sampled past the duration is the held final key, not
   a wrapped early frame.
+- **Speed is applied at whichever clock owns the pane.** Compared, the shell's
+  clock is multiplied (one `t`, seeked everywhere). Standalone, each pane scales
+  its own mechanism: Spine's `AnimationState.timeScale`, Godot's
+  `AnimationPlayer.speed_scale`, and — since the SkelForm runtime exposes no
+  scale — a clock the viewer integrates and pushes through `previewFreeze`. A
+  step change multiplies the interval, never the elapsed time, so the rig never
+  jumps forward when the control is pressed.
 - **Absent track = setup pose**, on both sides: the Spine runtime applies
   nothing for a track an animation does not touch, and the Godot wrapper
   mirrors that. A "wrong limb" under one animation often means one engine

@@ -529,6 +529,14 @@ sides and compare bone world positions numerically:
 The threshold for PASS is < 0.01 units on every bone. Deviations smaller than
 that are rounding; anything larger is a real bug.
 
+## Watching a comparison
+
+The compare page's sidebar carries every control: freeze every pane at the same
+`t`, an alignment grid, the animation tracks, one attachment row per slot, and
+the playback speed. Playback is driven by the shell's own clock — it seeks every
+pane to the same time each frame — so changing the speed cannot desynchronise
+the panes, and freezing always samples the same instant on all of them.
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for planned features and next steps.

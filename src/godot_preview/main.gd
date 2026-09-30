@@ -15,6 +15,7 @@ var _scene_root: Node
 var _setup_pose: Dictionary = {}
 var _js_play: JavaScriptObject
 var _js_freeze: JavaScriptObject
+var _js_speed: JavaScriptObject
 var _js_cam: JavaScriptObject
 var _js_inspect: JavaScriptObject
 var _js_attachments: JavaScriptObject
@@ -115,6 +116,11 @@ func _ready() -> void:
 		# Spine viewer's window.__state.trackTime: (anim, time).
 		_js_freeze = JavaScriptBridge.create_callback(Callable(self, "_web_freeze"))
 		win.previewFreeze = _js_freeze
+		# Playback rate for standalone play. The compare shell ignores it: its
+		# own clock seeks this pane every frame, so speed_scale never gets a
+		# delta to scale.
+		_js_speed = JavaScriptBridge.create_callback(Callable(self, "_web_speed"))
+		win.previewSpeed = _js_speed
 		# Camera diagnostics for the side-by-side comparison workflow: the
 		# shell receives the framing numbers through a created callback.
 		_js_cam = JavaScriptBridge.create_callback(Callable(self, "_report_cam"))
@@ -242,7 +248,6 @@ func _web_freeze(args: Array) -> void:
 	else:
 		print("PREVIEW_FREEZE= bad args ", args)
 		return
-	print("PREVIEW_FREEZE=", name, " t=", time)
 	if _player == null:
 		return
 	if _player.has_animation(name):
@@ -251,16 +256,41 @@ func _web_freeze(args: Array) -> void:
 		if name != _player.current_animation:
 			_restore_setup_pose()
 		_player.play(name)
-		_player.seek(time, true)
+		# A seek past the end holds the LAST key instead of wrapping: a master
+		# clock that runs for a minute pins this pane at the final pose while
+		# the Spine pane, which wraps by duration, keeps cycling. Wrap here, by
+		# this animation's own length, so every pane cycles at the same t.
+		var length := _player.get_animation(name).length
+		_player.seek(fmod(time, length) if length > 0.0 else time, true)
 	# Pause is the requested effect — it must survive an unknown name (the
 	# shell freezes before any track button is active). Freeze in place.
 	_player.pause()
+	# Reported AFTER the seek and pause: `pos` is the time the engine actually
+	# adopted, which is what a "the panes disagree" report has to be checked
+	# against — not the time the shell asked for.
+	print("PREVIEW_FREEZE=", name, " t=", time, " pos=", _player.current_animation_position)
+
+func _web_speed(args: Array) -> void:
+	# Playback rate, from the pane's own HUD control. Only standalone play
+	# reads it: while compared, the shell seeks this pane every frame and
+	# AnimationPlayer.seek sets the position outright, so speed_scale is never
+	# given a delta to scale. Step changes mid-play do not jump the rig —
+	# speed_scale multiplies the delta ahead, not the position behind.
+	if args.is_empty():
+		return
+	var value := 1.0
+	if args[0] is Array:
+		if args[0].size() >= 1:
+			value = float(args[0][0])
+	else:
+		value = float(args[0])
+	if _player != null:
+		_player.speed_scale = maxf(0.0, value)
+	print("PREVIEW_SPEED=", value)
 
 func _web_play(args: Array) -> void:
 	# JavaScriptBridge.create_callback wraps the JS call into one Array of
 	# arguments — the button click arrives as args[0], not as a bare String.
-	if args.is_empty():
-		return
 	var name: String
 	if args[0] is Array:
 		name = str(args[0][0])

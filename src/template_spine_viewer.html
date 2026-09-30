@@ -46,6 +46,11 @@ const nodes = hud.mount({ title: "spine 4.2" });
 hud.watchErrors(nodes);
 const explorer = hud.explorer();
 let state = null, skeleton = null;
+// Playback speed. AnimationState.timeScale multiplies the delta the state is
+// updated with, so the pose stays exact and only the clock scales — the same
+// thing the compare shell's master clock does from outside.
+let speedValue = 1;
+hud.speed(nodes, (value) => { speedValue = value; if (state) state.timeScale = value; }, 1);
 
 function showTracks(animStateData) {
   const names = animStateData.skeletonData.animations.map(a => a.name);
@@ -137,6 +142,7 @@ new spine.SpineCanvas(canvas, {
       hud.setNote(nodes, SKELETON_URL);
 
       state = new spine.AnimationState(new spine.AnimationStateData(skeleton.data));
+      state.timeScale = speedValue;
       state.apply(skeleton);
       skeleton.update(0);
       skeleton.updateWorldTransform(spine.Physics.update);
