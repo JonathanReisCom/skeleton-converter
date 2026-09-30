@@ -71,10 +71,6 @@ window.hud = (() => {
     nodes.note.textContent = text || "";
   }
 
-  function setTitle(nodes, text) {
-    nodes.title.textContent = text || "";
-  }
-
   // Rebuilds the track buttons. `names` is the animation list the runtime
   // actually loaded. Returns the buttons so a caller can drive them later.
   function tracks(nodes, names, onPick, active) {
@@ -158,6 +154,6 @@ window.hud = (() => {
     nodes.toggle.hidden = false;
   }
 
-  return { MARGIN, EMBEDDED, fitScale, mount, setTitle, setNote, tracks, mark,
-           fail, watchErrors, explorer, explorerRows };
+  return { fitScale, mount, setNote, tracks, mark, fail, watchErrors,
+           explorer, explorerRows };
 })();

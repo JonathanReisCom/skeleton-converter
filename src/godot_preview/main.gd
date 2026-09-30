@@ -24,6 +24,11 @@ var _js_set_attachment: JavaScriptObject
 var _attachments: Dictionary = {}
 
 func _ready() -> void:
+	# The same field the other panes clear to (#0f0f0f). The project setting
+	# (rendering/environment/defaults/default_clear_color) reaches the pack but
+	# the web build does not honour it: the default grey kept winning after the
+	# scene loaded. This call is what actually paints it.
+	RenderingServer.set_default_clear_color(Color(0.059, 0.059, 0.059))
 	var packed: PackedScene = load(SCENE)
 	if packed == null:
 		push_error("cannot load converted scene: " + SCENE)

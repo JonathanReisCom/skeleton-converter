@@ -3,134 +3,232 @@
 <head>
 <meta charset="utf-8">
 <title>skeleton-converter compare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@700&family=Roboto:wght@400;500;700&display=swap">
 <style>
   :root {
-    --bg: #16181f; --surface: #22252e; --border: #343946;
-    --text: #e8eaf0; --muted: #9aa3b5;
+    /* The stage is the player: black, quadrant, four equal cells. Everything
+       around it is the same library furniture as the studio — chips for what
+       you can pick, pills for what you can do, weight for hierarchy. The pane
+       field stays #0F0F0F — the page's own black — because BOTH panes clearing
+       to the same colour is
+       what makes a pixel comparison mean anything: that value is a contract,
+       not a mood. */
+    --bg: #0f0f0f; --surface: #212121; --chip: #272727; --hover: #3f3f3f;
+    --border: #303030; --text: #f1f1f1; --muted: #aaa;
+    --accent: #f00; --accent-soft: rgba(255, 0, 0, .14);
+    --stage: #0f0f0f;
     --godot: #478cbf; --spine: #f4801f; --skelform: #8f7ee7;
-    --freeze: #e6a23c;
+    --ui: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --brand: "Roboto Condensed", "Roboto", system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    /* Fluid, like the studio: the sidebar's width and the type scale follow
+       the window, so a 2560px screen is a wider player rather than a centered
+       one with dead margins. There is no page gutter or shell here — this is an
+       application, and the panes take every pixel the sidebar does not. */
+    --rail: clamp(208px, 15vw, 264px);
+    --radius: 12px; --radius-sm: 8px;
   }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-               font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
-  /* One sidebar owns every control; the stage is only panes. A control that
-     lives in two places is a control that can disagree with itself. */
-  body { display: flex; }
-  #side { flex: none; width: 238px; box-sizing: border-box; padding: 10px;
-          background: var(--surface); border-right: 1px solid var(--border);
-          overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-  #side .brand { font-family: var(--mono); font-size: 12px; font-weight: 700;
-                 letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  #side .brand em { font-style: normal; color: var(--text); }
-  #side .group { display: flex; flex-direction: column; gap: 4px; }
-  #side .group-title { font: 10px var(--mono); letter-spacing: .12em;
-                       text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
-  button { font: 12px var(--mono); padding: 4px 12px; border-radius: 999px;
-           border: 1px solid var(--border); background: transparent;
-           color: var(--muted); cursor: pointer; letter-spacing: .02em;
-           transition: background .12s, color .12s, border-color .12s; }
-  button:hover { color: var(--text); border-color: #4a5164; }
-  button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  button.active { background: var(--text); border-color: var(--text);
-                  color: var(--bg); font-weight: 700; }
-  #freezer { border-color: var(--freeze); color: var(--freeze); font-weight: 700; }
-  #freezer:hover { background: rgba(230,162,60,.12); color: var(--freeze); }
-  #freezer.active { background: var(--freeze); border-color: var(--freeze); color: #16181f; }
-  #freezer.active #tval { color: #16181f; }
-  #gridbtn { padding: 4px 10px; }
-  #gridbtn.active { background: transparent; border-color: var(--freeze);
-                    color: var(--freeze); font-weight: 400; }
-  /* Animation buttons stack: one per line, full width, left aligned — a list
-     you scan, not a row you hunt through. */
-  #tracks { display: flex; flex-direction: column; gap: 3px; }
-  #tracks button { width: 100%; text-align: left; border-radius: 8px; }
-  #attachments { display: flex; flex-direction: column; gap: 8px; }
-  #attachments details > summary { cursor: pointer; list-style: none; }
-  #attachments details > summary::-webkit-details-marker { display: none; }
-  #attachments details[open] > summary { color: var(--text); }
-  #attachments .row { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
-  #attachments .row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
-                           white-space: nowrap; color: var(--muted);
-                           font-family: var(--mono); font-size: 10px; }
-  #attachments select { flex: 0 0 auto; max-width: 110px; font: 10px var(--mono);
-                        background: var(--bg); color: var(--text);
-                        border: 1px solid var(--border); border-radius: 7px;
-                        padding: 2px 6px; cursor: pointer; }
-  #attachments select:hover { border-color: #4a5164; }
-  #attachments select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  /* Quadrant grid: two columns, one row per pair of panes, so each pane gets
-     the same box and the alignment grid/crosshair means the same thing in
-     every one of them. A run with fewer panes than cells keeps the empty
-     quadrant (the fourth format is still to come) instead of stretching the
-     others into a single tall strip. */
-  #stage { flex: 1 1 auto; min-width: 0; display: grid;
-           grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr;
-           gap: 1px; background: #000; }
-  .pane { position: relative; min-width: 0; min-height: 0; background: var(--bg); }
-  .pane[data-empty]::after { content: "empty"; position: absolute; top: 50%; left: 50%;
-           transform: translate(-50%, -50%); font: 11px var(--mono);
-           letter-spacing: .18em; text-transform: uppercase; color: #2b303c; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+               font: 400 14px/1.45 var(--ui); }
+  a { color: inherit; text-decoration: none; }
+
+  body { display: grid; grid-template-columns: var(--rail) minmax(0, 1fr);
+         height: 100vh; overflow: hidden; }
+
+  /* ── the sidebar: flush to the edge, its own scroll, full height ──────── */
+  .side { display: flex; flex-direction: column; gap: 4px; min-height: 0;
+          border-right: 1px solid var(--border); padding: 16px 14px 20px;
+          overflow-y: auto; scrollbar-width: thin; }
+  .side .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .wordmark { font: 700 19px/1 var(--brand); letter-spacing: -0.02em; }
+  .wordmark span { color: var(--accent); }
+  .back { background: var(--chip); border-radius: var(--radius-sm);
+          padding: 7px 12px; font: 500 12.5px var(--ui); white-space: nowrap; }
+  .back:hover { background: var(--hover); }
+  .back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .job { margin-bottom: 14px; }
+  .job .title { font: 500 clamp(15px, 1.05vw, 17px)/1.25 var(--ui);
+                letter-spacing: -0.005em; overflow-wrap: anywhere; }
+  .job .stamp { margin-top: 4px; color: var(--muted); font: 400 11.5px/1.4 var(--mono); }
+  .ctl { display: flex; align-items: center; justify-content: space-between;
+         width: 100%; text-align: left; border: 0; cursor: pointer;
+         background: var(--chip); color: var(--text);
+         border-radius: var(--radius-sm); padding: 11px 14px;
+         font: 500 clamp(13.5px, 0.95vw, 15px) var(--ui);
+         transition: background .12s, color .12s; }
+  .ctl:hover { background: var(--hover); }
+  .ctl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ctl .value { font: 400 clamp(12px, 0.8vw, 13px) var(--mono); color: var(--muted); }
+  .ctl.on { background: var(--text); color: var(--bg); }
+  .ctl.on .value { color: var(--bg); }
+  #gridbtn .value::after { content: "on"; }
+  #gridbtn.on .value::after { content: "off"; }
+  .rail .label { margin: 16px 0 8px; padding: 0 2px; color: var(--muted);
+                 font: 500 12px var(--ui); letter-spacing: 0.06em;
+                 text-transform: uppercase; }
+  .player { min-width: 0; }
+
+  /* ── the player ───────────────────────────────────────────────────────── */
+  /* The panes take everything the sidebar leaves — no fixed ratio, no frame:
+     the space is the point. */
+  .player { min-width: 0; min-height: 0; display: flex; }
+  #stage { flex: 1 1 auto; display: grid; grid-template-columns: 1fr 1fr;
+           grid-auto-rows: 1fr; gap: 1px; background: #000; min-width: 0; }
+  .pane { position: relative; min-width: 0; min-height: 0; background: var(--stage); }
+  .pane[data-empty]::before { content: ""; position: absolute; inset: 26%;
+           border: 1px dashed #2b2f38; border-radius: 6px; }
+  .pane[data-empty]::after { content: "no format here yet"; position: absolute;
+           top: 50%; left: 50%; transform: translate(-50%, -50%);
+           font: 400 11px var(--ui); letter-spacing: 0.08em; color: #565c68;
+           background: var(--stage); padding: 0 10px; }
+
+  /* Pane labels are chips, the same furniture as the studio's. */
   .pane .tag { position: absolute; top: 10px; left: 10px; z-index: 2;
-               display: flex; align-items: center; gap: 7px;
-               background: rgba(12,14,19,.78); border: 1px solid var(--border);
-               padding: 4px 11px 4px 9px; border-radius: 999px;
-               font: 11px var(--mono); letter-spacing: .05em; pointer-events: none;
-               text-transform: uppercase; color: var(--text); }
-  .pane .tag i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+               display: inline-flex; align-items: center; gap: 8px;
+               white-space: nowrap; max-width: calc(100% - 20px); overflow: hidden;
+               background: rgba(15, 15, 15, .88); border-radius: var(--radius-sm);
+               padding: 6px 11px; font: 500 clamp(11.5px, 0.8vw, 13px)/1 var(--ui);
+               color: var(--text); }
+  .pane .tag em { font-style: normal; color: var(--muted); }
+  .pane .tag i { width: 7px; height: 7px; border-radius: 50%; flex: none;
+                 background: var(--muted); }
   .pane[data-kind="godot"] .tag i { background: var(--godot); }
   .pane[data-kind="spine"] .tag i { background: var(--spine); }
   .pane[data-kind="skelform"] .tag i { background: var(--skelform); }
-  .pane[data-kind="godot"] .tag span { color: #8db8d8; }
-  .pane[data-kind="spine"] .tag span { color: #f0b27a; }
-  .pane[data-kind="skelform"] .tag span { color: #b9aef2; }
+  .pane .tag u { text-decoration: none; color: var(--muted); font-weight: 400; }
   .pane[data-kind="godot"] .tag span::after { content: " · Godot 4.7"; }
   .pane[data-kind="spine"] .tag span::after { content: " · Spine 4.2"; }
   .pane[data-kind="skelform"] .tag span::after { content: " · SkelForm web"; }
-  .pane[data-failed="1"] .tag span::after { content: " · not loaded"; }
-  iframe { position: absolute; inset: 0; width: 100%; height: 100%;
-           border: 0; background: transparent; }
-  /* Alignment grid: identical spacing over every pane, so a feature at the
-     same screen position in any two panes sits on the same line. */
-  .grid {
-    position: absolute; inset: 0; pointer-events: none; z-index: 1;
+  .pane[data-failed="1"] .tag span::after { content: " · not loaded"; color: #ff8a8a; }
+  .pane iframe { position: absolute; inset: 0; width: 100%; height: 100%;
+                 border: 0; background: transparent; }
+
+  .grid { position: absolute; inset: 0; pointer-events: none; z-index: 1;
     background-image:
-      repeating-linear-gradient(0deg, rgba(255,255,255,.12) 0 1px, transparent 1px 50px),
-      repeating-linear-gradient(90deg, rgba(255,255,255,.12) 0 1px, transparent 1px 50px),
-      repeating-linear-gradient(0deg, rgba(120,200,255,.25) 0 1px, transparent 1px 200px),
-      repeating-linear-gradient(90deg, rgba(120,200,255,.25) 0 1px, transparent 1px 200px);
-    background-position: 50% 50%;
-  }
-  .crosshair {
-    position: absolute; inset: 0; pointer-events: none; z-index: 1;
+      repeating-linear-gradient(0deg, rgba(255,255,255,.10) 0 1px, transparent 1px 50px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.10) 0 1px, transparent 1px 50px),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.24) 0 1px, transparent 1px 200px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.24) 0 1px, transparent 1px 200px);
+    background-position: 50% 50%; }
+  .crosshair { position: absolute; inset: 0; pointer-events: none; z-index: 1;
     background:
-      linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
-      linear-gradient(0deg, transparent calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% - 0.5px), rgba(255,140,80,.5) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+      linear-gradient(90deg, transparent calc(50% - .5px), rgba(255,255,255,.5) calc(50% - .5px), rgba(255,255,255,.5) calc(50% + .5px), transparent calc(50% + .5px)),
+      linear-gradient(0deg, transparent calc(50% - .5px), rgba(255,255,255,.5) calc(50% - .5px), rgba(255,255,255,.5) calc(50% + .5px), transparent calc(50% + .5px)); }
+
+  /* ── the action bar under the player ──────────────────────────────────── */
+  .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+             margin: 18px 0 14px; }
+  .actions .title { font: 500 18px/1.2 var(--ui); letter-spacing: -0.01em;
+                    margin-right: auto; }
+  .action { display: inline-flex; align-items: center; gap: 8px; border: 0;
+            background: var(--chip); color: var(--text); border-radius: var(--radius-sm);
+            padding: 9px 15px; font: 500 13px var(--ui); cursor: pointer;
+            transition: background .12s, color .12s; }
+  .action:hover { background: var(--hover); }
+  .action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .action .value { font: 400 12px var(--mono); color: var(--muted); }
+  .action.on { background: var(--text); color: var(--bg); }
+  .action.on .value { color: var(--bg); }
+
+  /* ── chips: the animations, stacked so the list reads down ───────────── */
+  #tracks { display: flex; flex-direction: column; gap: 4px; }
+  /* The list sits on the page's own background in every state — no fill makes
+     a row look like a different panel. The choice is marked with ink and a
+     bar. */
+  #tracks .track { width: 100%; text-align: left; border: 0; cursor: pointer;
+                   background: var(--bg); color: var(--muted);
+                   border-radius: var(--radius-sm); padding: 9px 14px;
+                   box-shadow: inset 2px 0 0 transparent;
+                   font: 400 clamp(13px, 0.92vw, 15px) var(--ui); white-space: nowrap;
+                   overflow: hidden; text-overflow: ellipsis;
+                   transition: color .12s, box-shadow .12s; }
+  #tracks .track:hover { color: var(--text); }
+  #tracks .track:hover { background: var(--hover); }
+  #tracks .track:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #tracks .track.active { background: var(--bg); color: var(--text);
+                          font-weight: 500;
+                          box-shadow: inset 2px 0 0 var(--accent); }
+  #tracks .waiting { color: var(--muted); font: 400 13px var(--ui); padding: 9px 14px; }
+
+  /* ── slots: the description of the panes, dense ───────────────────────── */
+  .slots { margin-top: 18px; }
+  .slots > summary { cursor: pointer; list-style: none; display: flex;
+                     align-items: center; color: var(--muted);
+                     font: 500 12px var(--ui); letter-spacing: 0.06em;
+                     text-transform: uppercase; padding: 2px 0 8px; }
+  .slots > summary::-webkit-details-marker { display: none; }
+  .slots > summary::after { content: "show"; margin-left: auto; font-weight: 400; }
+  .slots[open] > summary::after { content: "hide"; }
+  .slots[open] > summary { color: var(--text); }
+  .slots .row { display: flex; align-items: center; gap: 6px; padding: 6px 0;
+                border-bottom: 1px solid var(--border); }
+  .slots .row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; color: var(--muted);
+                     font: 400 11.5px var(--mono); }
+  /* Same width for every dropdown: `max-width` sized each one to its own text,
+     and `min-width: auto` let a long option push it wider. A fixed basis with
+     min-width zeroed is what actually holds the column. */
+  .slots select { flex: 0 0 46%; min-width: 0; font: 400 11.5px var(--ui);
+                  color: var(--text); background: var(--chip); border: 0;
+                  border-radius: 6px; padding: 4px 6px; cursor: pointer; }
+  .slots select:hover { background: var(--hover); }
+  .slots select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  @media (max-width: 900px) {
+    body { grid-template-columns: minmax(0, 1fr);
+           grid-template-rows: auto minmax(0, 1fr); }
+    .side { border-right: 0; border-bottom: 1px solid var(--border);
+            max-height: 52vh; }
+    .side .head, .side .job { margin-bottom: 10px; }
+    #tracks { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+    #tracks .track { width: auto; flex: none; color: var(--text);
+                     border: 1px solid var(--border);
+                     box-shadow: inset 0 -2px 0 transparent; }
+    #tracks .track.active { border-color: var(--hover);
+                            box-shadow: inset 0 -2px 0 var(--accent); }
   }
-  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
-<aside id="side">
-  <div class="brand">skeleton·<em>compare</em></div>
-  <div class="group">
-    <button id="freezer" title="Freeze every pane at the same time">◆ t=<span id="tval">0.0</span></button>
-    <button id="gridbtn" title="Toggle the alignment grid over every pane" class="active">⊞ grid</button>
+<!-- An application, not a page: one sidebar against the left edge for its
+     whole height, and the panes taking every pixel that is left. -->
+<aside class="side">
+  <div class="head">
+    <a class="wordmark" href="/">skeleton<span>·</span>compare</a>
+    <a class="back" href="/">← Studio</a>
   </div>
-  <div class="group">
-    <div class="group-title">animations</div>
-    <div id="tracks">loading…</div>
+  <div class="job">
+    <div class="title" id="jobtitle">comparison</div>
+    <div class="stamp" id="where"></div>
   </div>
-  <div class="group" id="attachments-group" hidden>
-    <div class="group-title">attachments</div>
-    <div id="attachments"></div>
-  </div>
+
+  <button class="ctl" id="freezer" title="Freeze every pane at the same time">
+    Freeze <span class="value" id="tval">t=0.0</span>
+  </button>
+  <button class="ctl" id="gridbtn" title="Toggle the alignment grid over every pane">
+    Grid <span class="value"></span>
+  </button>
+
+  <div class="label">Animations</div>
+  <div id="tracks"><span class="waiting">loading…</span></div>
+
+  <details class="slots" id="attachments-group" open hidden>
+    <summary id="slotssummary">Slots</summary>
+    <div class="rows" id="attachments"></div>
+  </details>
 </aside>
-<div id="stage"></div>
+<main class="player"><div id="stage"></div></main>
+
 <script>
 "use strict";
 // Compare shell: N typed panes (godot / spine / skelform) laid out in a
-// quadrant grid — source first — with every control in the left sidebar. Each
-// pane is driven through the protocol it already publishes — previewPlay/
+// quadrant grid — source first — with the controls under the player and the
+// slots in a panel, the way a page that plays something is arranged. Each pane
+// is driven through the protocol it already publishes — previewPlay/
 // previewFreeze (Godot wrapper) and window.__state (Spine viewer). Iframes are
 // same-origin (one http.server serves the parent folder), so the parent may
 // reach into them directly.
@@ -140,18 +238,35 @@ const tracksBox = document.getElementById("tracks");
 const attachmentsBox = document.getElementById("attachments");
 const attachmentsGroup = document.getElementById("attachments-group");
 const tval = document.getElementById("tval");
+const where = document.getElementById("where");
+const jobtitle = document.getElementById("jobtitle");
 
 let frozen = false;
 let freezeTime = 0.0;
 let currentName = null;  // shell-owned: set by play(), never guessed
 
-const frames = PANES.map(p => {
+// The job the page belongs to: the first pane's folder is `<n>-<role>-<name>-
+// <format>`, so the name in the middle is what to show above the player.
+if (PANES.length) {
+  const parts = PANES[0].label.split("-");
+  if (parts.length >= 4) jobtitle.textContent = parts.slice(2, -1).join("-");
+  where.textContent = PANES.length + " panes · " + PANES[0].label.split("-").pop() + " first";
+}
+
+const frames = PANES.map((p, index) => {
   const pane = document.createElement("div");
   pane.className = "pane";
   pane.dataset.kind = p.kind;
+  const role = /-source-/.test(p.label) ? "source" : "target";
   const label = document.createElement("div");
   label.className = "tag";
-  label.innerHTML = "<i></i><span>" + p.label.replace(/</g, "&lt;") + "</span>";
+  // The panes are a sequence (the folders are numbered 1-source, 2-target…),
+  // so the number is information, not decoration: it says which pane came
+  // from the rig and which came from the conversion. The folder name is long
+  // and lives in the tooltip.
+  label.title = p.label;
+  label.innerHTML = "<em>" + String(index + 1).padStart(2, "0") + "</em>"
+    + "<i></i><span></span><u>" + role + "</u>";
   const iframe = document.createElement("iframe");
   iframe.src = p.url;
   const grid = document.createElement("div");
@@ -169,9 +284,8 @@ const frames = PANES.map(p => {
 document.getElementById("gridbtn").onclick = (e) => {
   const on = !frames[0].grid.style.display;
   frames.forEach(f => f.grid.style.display = on ? "none" : "");
-  e.currentTarget.classList.toggle("active", !on);
+  e.currentTarget.classList.toggle("on", !on);
 };
-// start with the grid visible
 frames.forEach(f => f.grid.style.display = "");
 
 // Quadrant grid: pad the last row so a run with fewer panes than cells keeps
@@ -216,8 +330,8 @@ function paneAnimNames(pane) {
   // A Godot wrapper builds its track buttons from window.previewAnims and a
   // SkelForm pane builds them from the archive's animations; either way the
   // names are readable from its DOM (same origin). Read the HUD's track box
-  // first: a pane's own controls ("attachments") are buttons too, and reading
-  // them as animation names put a fake track in the shell's bar.
+  // first: a pane's own controls are buttons too, and reading them as
+  // animation names put a fake chip in the row.
   try {
     const doc = pane.iframe.contentDocument;
     const inTracks = [...doc.querySelectorAll(".hud .tracks button")];
@@ -227,13 +341,13 @@ function paneAnimNames(pane) {
   } catch (e) { return null; }
 }
 
-// The attachment explorer, in the sidebar: ONE row per slot, driving every
-// pane that has that slot. The panes report their own slots (their runtimes are
-// the only ones that know them), and the rows are merged by slot name — a slot
-// is the same slot in every pane, so a select that moved one side and not the
-// other would be a comparison of two different rigs. Option names are matched
-// loosely across panes: Godot sanitizes what Spine keeps verbatim
-// (`Eye_Anger` -> `Eye_anger`), and only the pane can name its own entry.
+// The attachment explorer: ONE row per slot, driving every pane that has that
+// slot. The panes report their own slots (their runtimes are the only ones
+// that know them), and the rows are merged by slot name — a slot is the same
+// slot in every pane, so a select that moved one side and not the other would
+// be a comparison of two different rigs. Option names are matched loosely
+// across panes: Godot sanitizes what Spine keeps verbatim (`Eye_Anger` ->
+// `Eye_anger`), and only the pane can name its own entry.
 function slotKey(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -264,13 +378,6 @@ function buildAttachments() {
   });
 
   attachmentsBox.textContent = "";
-  const group = document.createElement("details");
-  group.open = true;
-  const title = document.createElement("summary");
-  title.className = "group-title";
-  title.textContent = "slots (" + slots.size + ")";
-  group.appendChild(title);
-
   slots.forEach(slot => {
     const line = document.createElement("div");
     line.className = "row";
@@ -305,9 +412,10 @@ function buildAttachments() {
     };
     line.appendChild(name);
     line.appendChild(select);
-    group.appendChild(line);
+    attachmentsBox.appendChild(line);
   });
-  attachmentsBox.appendChild(group);
+  const summary = document.getElementById("slotssummary");
+  summary.textContent = "Slots (" + slots.size + ")";
   attachmentsGroup.hidden = slots.size === 0;
 }
 
@@ -343,12 +451,32 @@ Promise.all(ready).then((ws) => {
   tracksBox.textContent = "";
   names.forEach(name => {
     const b = document.createElement("button");
+    b.className = "track";
     b.textContent = name;
     b.onclick = () => play(name, b);
     tracksBox.appendChild(b);
   });
+  // The panes autoplay their own first animation, so the row starts on the
+  // same one: a control surface showing nothing playing while the rig moves is
+  // a control surface you stop trusting.
+  const playing = frames.map((f) => {
+    try {
+      const active = f.iframe.contentDocument
+        .querySelector(".hud .tracks button.active");
+      return active && active.textContent;
+    } catch (e) { return null; }
+  }).find(Boolean);
+  if (playing) {
+    const button = [...tracksBox.querySelectorAll("button")]
+      .find(b => b.textContent === playing);
+    if (button) {
+      currentName = playing;
+      clearActive();
+      button.classList.add("active");
+    }
+  }
   // Pane HUD buttons drive the shell too: clicking a track inside either
-  // pane switches everything (shell bar + other pane) so no pane can end
+  // pane switches everything (row + other pane) so no pane can end
   // up on a different animation from the rest.
   frames.forEach((f, i) => {
     try {
@@ -449,7 +577,7 @@ function freezeSpineAt(name, t, state, sk) {
 
 document.getElementById("freezer").onclick = () => {
   frozen = !frozen;
-  document.getElementById("freezer").classList.toggle("active", frozen);
+  document.getElementById("freezer").classList.toggle("on", frozen);
   const name = currentName || (tracksBox.querySelector("button.active") || {}).textContent;
   if (frozen) {
     // Kill the master clock FIRST: a pending requestAnimationFrame would
@@ -464,7 +592,7 @@ document.getElementById("freezer").onclick = () => {
     } else {
       freezeTime = Math.round((freezeTime + 0.3) * 10) / 10;
     }
-    tval.textContent = freezeTime.toFixed(1);
+    tval.textContent = "t=" + freezeTime.toFixed(1);
     // Let the in-flight frame drain, then freeze once, deterministically.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => seekAll(name, freezeTime));

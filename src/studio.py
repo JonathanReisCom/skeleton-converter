@@ -14,7 +14,7 @@ A job is a folder under the root, which is also the served directory:
     <root>/<job>/upload/                  what the browser sent
     <root>/<job>/1-source-<fmt>/          the source rig, playable in a browser
     <root>/<job>/<n>-target-<fmt>/        what each conversion wrote
-    <root>/<job>/compare.html             source first, every output after it
+    <root>/<job>/compare.html             rendered per request (see below)
 
 The FIRST pane plays the ORIGINAL file — the Spine rig with its own atlas, a
 SkelForm archive, or a Godot scene packed for the browser engine
@@ -281,15 +281,45 @@ def delete_job(root: Path, payload: dict) -> dict:
     return {"deleted": name}
 
 
+def _job_card(job: Path, panes: list) -> dict:
+    """One job as the page shows it: what it converted, and a thumbnail.
+
+    The thumbnail is the rig's own art — the page image the upload carried,
+    served from the pane that kept it. A rig with no page image (a Godot scene
+    is code plus loose resources) has none, and the card says so instead of
+    showing a broken frame.
+    """
+    formats, thumb = [], None
+    for pane in panes:
+        parts = pane.name.split("-")
+        if len(parts) >= 3:
+            formats.append(parts[-1])
+        if thumb is None:
+            for image in sorted((pane / "output").glob("*.png")):
+                thumb = f"/{job.name}/{pane.name}/output/{image.name}"
+                break
+    stamp = job.stat().st_mtime
+    return {"job": job.name, "url": f"/{job.name}/compare.html",
+            "when": time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp)),
+            "panes": len(panes), "formats": formats, "thumb": thumb}
+
+
 def _jobs(root: Path) -> list:
-    """Finished jobs, newest first, for the studio page."""
+    """Finished jobs, newest first, for the studio page.
+
+    A job is a folder holding an upload and at least two panes. The compare
+    page is not written to disk any more — the studio renders it per request —
+    so a written file cannot be what marks a job as finished.
+    """
     found = []
-    for page in root.glob("*/compare.html"):
-        found.append((page.stat().st_mtime,
-                      {"job": page.parent.name,
-                       "url": f"/{page.parent.name}/compare.html",
-                       "when": time.strftime("%Y-%m-%d %H:%M",
-                                             time.localtime(page.stat().st_mtime))}))
+    for job in root.iterdir():
+        if not (job / "upload").is_dir():
+            continue
+        panes = sorted(p for p in job.iterdir()
+                       if p.is_dir() and p.name[:1].isdigit())
+        if len(panes) < 2:
+            continue
+        found.append((job.stat().st_mtime, _job_card(job, panes)))
     found.sort(key=lambda entry: entry[0], reverse=True)
     return [entry for _mtime, entry in found]
 
@@ -353,8 +383,10 @@ def convert_request(root: Path, payload: dict, godot_bin=None) -> dict:
         converted.append({"target": target, "pane": pane.name})
 
     log.append(f"--- compare: {' vs '.join(pane.name for pane in panes)} ---")
-    page = compare_out.emit_compare(*panes)
-    return {"job": job.name, "url": f"/{job.name}/{page.name}",
+    # No page is written: the compare shell is rendered per request from the
+    # panes below (`_live_document`), so a file on disk would only ever be a
+    # stale copy of it. The job keeps the conversion; the chrome is code.
+    return {"job": job.name, "url": f"/{job.name}/compare.html",
             "detected": fmt, "log": log, "source": source.name,
             "targets": converted, "panes": [pane.name for pane in panes]}
 

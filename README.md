@@ -88,7 +88,7 @@ export with) does a side fall back to replaying through the Spine leg, and its
 folder name then says `via-spine`.
 
 Jobs land under `tmp/studio/` (`--root` moves that): each one keeps the upload,
-every pane and its `compare.html`, and the studio page lists the recent ones —
+every pane and its conversion, and the studio page lists the recent ones —
 one row each, with a `remove` button that deletes that job (upload, panes and
 page). Nothing prunes the folder otherwise, and a job that carried a Godot pane
 weighs ~40 MB, so it is worth clearing once you are done with it.

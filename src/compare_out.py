@@ -1,12 +1,13 @@
-"""Emit the side-by-side compare shell: one HTML page embedding two preview
-bundles as typed panes (Godot wasm and/or Spine viewer) with shared play and
-freeze controls.
+"""Render the compare shell: one HTML page embedding N preview bundles as typed
+panes (Godot wasm, Spine viewer, SkelForm player) with every control in a left
+sidebar.
 
-The shell is written into the PARENT folder of the bundles and served from
-there, so every iframe loads its real index.html same-origin and the parent
-may drive them through the handles they already publish (previewPlay/
-previewFreeze for Godot wrappers, window.__state for Spine viewers). No
-assets are copied or duplicated.
+The shell is rendered, not written: the studio calls ``render_compare`` on each
+request so the chrome follows the code while the conversions stay frozen. The
+bundles must sit under one parent, because every pane URL is relative to it and
+one origin is what lets the shell reach into the iframes and drive them through
+the handles they publish (previewPlay/previewFreeze for the Godot wrapper and
+the SkelForm player, window.__state for the Spine viewer).
 
 Requires python3 stdlib only.
 """
@@ -54,26 +55,3 @@ def render_compare(*bundles: Path) -> str:
     html = TEMPLATE_PATH.read_text(encoding="utf-8")
     # `</` closes the inline script it sits in, so escape it before injecting.
     return html.replace("__PANES__", json.dumps(panes).replace("</", "<\\/"))
-
-
-def emit_compare(*bundles: Path) -> Path:
-    """Write compare.html into the parent folder of the bundles; return its path.
-
-    Accepts two or more bundles (any mix of godot, spine and skelform), all
-    under one parent folder. The stage lays the panes out across the width in
-    the order given, and each is labeled and typed — the studio uses this to
-    show the source first and one pane per converted output after it.
-    """
-    if len(bundles) < 2:
-        raise ValueError("compare needs at least 2 bundle folders")
-    dirs = [Path(b).resolve() for b in bundles]
-    parent = dirs[0].parent
-    for d in dirs:
-        if d.parent != parent:
-            raise ValueError(
-                "compare needs all bundles under one parent folder "
-                f"(got {[str(d) for d in dirs]})")
-    html = render_compare(*bundles)
-    out = parent / "compare.html"
-    out.write_text(html, encoding="utf-8")
-    return out

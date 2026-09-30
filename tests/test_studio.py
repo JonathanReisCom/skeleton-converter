@@ -84,8 +84,9 @@ def test_page_lists_the_outputs_it_converts_to(tmp_path):
     # built here even though the CLI writes it.
     assert '"tres"' not in html
     assert '"frames": true' in html, "the frame-based target must know about fps"
-    assert "every other format" in html, \
-        "the page must promise every output, not a choice of one"
+    # The page offers no target to pick: every output is listed (asserted
+    # above) and there is no <select> to choose one from.
+    assert 'id="target"' not in html
 
 
 def test_upload_converts_into_every_other_format(studio_server, tmp_path):
@@ -125,13 +126,13 @@ def test_upload_converts_into_every_other_format(studio_server, tmp_path):
         "the pane must load a pinned runtime, not a branch"
     assert "cdn.jsdelivr.net/gh/Retropaint/skelform-web-player@" in pane_html
 
-    page = (job / "compare.html").read_text(encoding="utf-8")
+    # The shell is SERVED, not read off disk: the studio renders it per request
+    # so it can follow the code without a reconversion.
+    status, page = _get(url + data["url"])
+    assert status == 200 and "compare" in page
     order = [page.index(pane) for pane in data["panes"]]
     assert order == sorted(order), "the shell must keep the source-first order"
     assert page.count('"kind": "skelform"') == 1
-
-    status, served = _get(url + data["url"])
-    assert status == 200 and "compare" in served
 
     # And the page now lists the job, so a previous comparison is one click away.
     _status, listing = _get(url + "/")
@@ -155,7 +156,8 @@ def test_a_rig_without_its_atlas_still_compares_as_spine(studio_server, tmp_path
     assert any("no .atlas beside the source JSON" in line for line in data["log"]), \
         "a missing atlas has to be said out loud, not discovered in a 404"
 
-    page = (root / data["job"] / "compare.html").read_text(encoding="utf-8")
+    status, page = _get(url + data["url"])
+    assert status == 200
     panels = json.loads(re.search(r"const PANES = (\[.*?\]);", page, re.S).group(1))
     assert panels[0]["kind"] == "spine", \
         "the source pane is typed from the rig itself, never from its neighbours"

@@ -1,4 +1,4 @@
-/* Shared chrome for the converter's browser viewers.
+/* Shared chrome for the converter's browser viewers — see hud.js.
  *
  * The three viewers (Spine, SkelForm, Godot) drive different runtimes, so
  * nothing about the engine is shared — but the pane has to LOOK identical in
@@ -7,79 +7,81 @@
  * emitted bundle (an emitted folder is served on its own, so it cannot link
  * back to the repo).
  *
- * Each template sets `--accent` (the pane colour its label and buttons use);
- * everything else is identical by construction. Ids are not used here: the
- * component returns its own nodes, and a compare shell reads a pane's tracks by
- * tag, never by id.
+ * Opened standalone the HUD is the whole interface, over the engine's own dark
+ * field; embedded in a compare shell the shell owns the controls and this
+ * chrome is hidden (`.embedded` below). Either way it is the same furniture as
+ * the studio: dark cards, chips for what you can pick, weight for hierarchy,
+ * the accent only on the active choice.
  */
 :root {
-  --surface: rgba(12,14,19,.78); --border: #343946;
-  --text: #e8eaf0; --muted: #9aa3b5; --freeze: #e6a23c;
-  --field: #22252e; --accent: var(--text);
+  --surface: #212121; --chip: #272727; --hover: #3f3f3f;
+  --border: #303030; --text: #f1f1f1; --muted: #aaa;
+  --accent: #f00; --accent-soft: rgba(255, 0, 0, .16);
+  --ui: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --radius: 12px; --radius-sm: 8px;
 }
 .hud {
-  position: fixed; top: 44px; left: 10px; z-index: 2;
-  font: 13px/1.5 system-ui, sans-serif; color: var(--text);
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px; padding: 9px 12px; max-width: calc(100% - 20px);
+  position: fixed; top: 12px; left: 12px; z-index: 2;
+  max-width: calc(100% - 24px);
+  background: rgba(15, 15, 15, .92); color: var(--text);
+  border-radius: var(--radius); padding: 12px 14px;
+  font: 400 14px/1.45 var(--ui);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .5);
 }
-.hud .title { font: 11px var(--mono); letter-spacing: .06em;
-              text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
-.hud .title b { color: var(--text); font-weight: 400; text-transform: none;
-                letter-spacing: 0; }
-.hud .note { font: 11px var(--mono); color: var(--muted); margin-bottom: 6px; }
-.hud .tracks { white-space: nowrap; }
+.hud .title { font: 500 13px/1 var(--ui); letter-spacing: -0.005em; }
+.hud .title b { font-weight: 500; }
+.hud .note { margin-top: 6px; font: 400 12px/1.5 var(--mono); color: var(--muted); }
+.hud .tracks { margin-top: 10px; white-space: nowrap; }
 .hud button {
-  font: 12px var(--mono); margin-right: 4px; margin-bottom: 4px;
-  background: transparent; color: var(--muted); border: 1px solid var(--border);
-  border-radius: 999px; padding: 3px 11px; cursor: pointer;
-  transition: background .12s, color .12s, border-color .12s;
+  font: 500 13px var(--ui); margin: 0 6px 6px 0; padding: 7px 13px;
+  background: var(--chip); color: var(--text); border: 0;
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: background .12s, color .12s;
 }
-.hud button:hover { color: var(--text); border-color: #4a5164; }
-.hud button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-.hud button.active { background: var(--text); color: #16181f;
-                     border-color: var(--text); font-weight: 700; }
-.hud .error { color: #ff7b7b; white-space: pre-wrap; max-width: 62ch; }
+.hud button:hover { background: var(--hover); }
+.hud button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hud button.active { background: var(--text); color: #0f0f0f; font-weight: 500; }
+.hud .error { margin-top: 8px; max-width: 62ch; color: #ff9b9b;
+              font: 400 12px/1.6 var(--mono); white-space: pre-wrap; }
 
 /* Attachment explorer: the toggle sits by the pane's top-right corner, the
    panel under it. Both viewers that have one feed the same row shape. */
 .hud-toggle {
-  position: fixed; top: 44px; right: 10px; z-index: 3;
-  font: 11px var(--mono); letter-spacing: .05em; text-transform: uppercase;
-  background: var(--surface); color: var(--muted);
-  border: 1px solid var(--border); border-radius: 999px;
-  padding: 5px 13px; cursor: pointer;
-  transition: background .12s, color .12s, border-color .12s;
+  position: fixed; top: 12px; right: 12px; z-index: 3;
+  font: 500 12px var(--ui); letter-spacing: 0.05em; text-transform: uppercase;
+  background: rgba(15, 15, 15, .92); color: var(--text);
+  border: 0; border-radius: var(--radius-sm); padding: 9px 15px; cursor: pointer;
+  transition: background .12s, color .12s;
 }
-.hud-toggle:hover { color: var(--text); border-color: #4a5164; }
-.hud-toggle:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-.hud-toggle.active { background: var(--text); color: #16181f;
-                     border-color: var(--text); font-weight: 700; }
+.hud-toggle:hover { background: var(--hover); }
+.hud-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hud-toggle.active { background: var(--text); color: #0f0f0f; }
 .hud-panel {
-  position: fixed; top: 82px; right: 10px; z-index: 2;
-  font: 12px/1.4 system-ui, sans-serif; color: var(--text);
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 14px; padding: 9px 12px;
-  max-height: 90vh; overflow: auto; width: 260px;
+  position: fixed; top: 56px; right: 12px; z-index: 2;
+  width: clamp(250px, 24vw, 330px); max-height: 82vh; overflow: auto;
+  background: rgba(15, 15, 15, .95); color: var(--text);
+  border-radius: var(--radius); padding: 12px 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .5);
 }
-.hud-panel .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-.hud-panel .row-name {
-  flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: var(--muted);
-  font-family: var(--mono); font-size: 11px;
-}
+.hud-panel .row { display: flex; align-items: center; gap: 8px; padding: 7px 0;
+                  border-bottom: 1px solid var(--border); }
+.hud-panel .row:last-child { border-bottom: 0; }
+.hud-panel .row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                       white-space: nowrap; font: 400 12px var(--mono);
+                       color: var(--muted); }
 .hud-panel select {
-  flex: 0 0 auto; max-width: 140px; font: 11px var(--mono);
-  background: var(--field); color: var(--text); border: 1px solid var(--border);
-  border-radius: 7px; padding: 3px 8px; cursor: pointer;
+  flex: 0 0 148px; min-width: 0; font: 400 12px var(--ui);
+  color: var(--text); background: var(--chip); border: 0;
+  border-radius: 6px; padding: 5px 8px; cursor: pointer;
 }
-.hud-panel select:hover { border-color: #4a5164; }
-.hud-panel select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-/* Embedded in a compare shell: the parent's bar is the control surface, and a
-   pane that fails to load says so in the shell's own tag ("· not loaded"), so
-   the error box is not lost either. Opened standalone, the HUD is all there. */
+.hud-panel select:hover { background: var(--hover); }
+.hud-panel select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Embedded in a compare shell: the shell is the control surface, and a pane
+   that fails to load says so in the shell's own chip ("· not loaded"), so the
+   error box is not lost either. Opened standalone, the HUD is all there. */
 .embedded .hud, .embedded .hud-toggle, .embedded .hud-panel { display: none; }
 @media (prefers-reduced-motion: reduce) {
-  .hud button, .hud-toggle { transition: none; }
+  .hud button, .hud-toggle, .hud-panel select { transition: none; }
 }

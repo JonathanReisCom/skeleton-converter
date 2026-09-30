@@ -129,9 +129,10 @@ format).
 
 ## Side-by-side compare (browser)
 
-The studio is the compare: upload a rig and it writes one `compare.html` in the
-job folder holding every pane (source first, one per converted format) and
-serves it. Equivalent by hand, for bundles that are already on disk — they must
+The studio is the compare: upload a rig and it serves a `compare.html` holding
+every pane (source first, one per converted format) — rendered from the current
+templates on every request, so the chrome follows the code while the conversion
+in the job folder stays as the converter wrote it. Equivalent by hand, for bundles that are already on disk — they must
 sit under one parent (one origin so the shell can reach into every iframe):
 
 ```bash
@@ -171,8 +172,9 @@ Semantics worth knowing when debugging a frozen compare:
 
 ## Attachment explorer (both panes)
 
-**Inside a compare shell the panes hide their own chrome** — the shell's bar is
-the control surface (tracks, master clock, freeze), so a second set of buttons
+**Inside a compare shell the panes hide their own chrome** — the shell's left
+sidebar is the control surface (tracks, master clock, freeze, grid, and one
+attachment row per slot driving every pane), so a second set of buttons
 driving the same thing would just be noise. The explorer travels with that
 chrome: it is available when a pane is opened on its own (a bundle's
 `index.html`, or `view`), not in the compare grid. To bring it back inside the
