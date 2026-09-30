@@ -109,7 +109,9 @@ the source's times survive: the converter picks 60 fps, moves to a finer grid
 only when that stops two keys from collapsing into one, and reports on the
 conversion line what the choice cost (`--fps` overrides it).
 
-Zero third-party dependencies for the converter — Python 3.10+ stdlib only.
+The converter runs on a bare `python3` (3.10+) — no install step, no runtime
+dependencies. Free and open-source dependencies are allowed where they earn
+their place (see `AGENTS.md`); the runtime path stays install-free.
 
 ## Command line
 

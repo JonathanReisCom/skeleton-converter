@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from . import hud_assets
+
 # The HTML shell lives beside this module as a real file (template_spine_
 # viewer.html), so editors and language tools lint the markup/JS directly
 # instead of a python string.
@@ -40,10 +42,14 @@ def _find_atlas(json_path: Path) -> str:
     return candidates[0].name if len(candidates) == 1 else ""
 
 
-def emit_viewer(output_path: str, skeleton_json_path: str | None = None,
-                skeleton_url: str | None = None,
-                atlas_url: str | None = None) -> str:
-    """Write the reusable viewer shell.
+def render_viewer(skeleton_json_path: str | None = None,
+                  skeleton_url: str | None = None,
+                  atlas_url: str | None = None) -> str:
+    """The viewer shell as text, so a caller can serve it live.
+
+    The studio renders on every request: the conversion stays frozen while the
+    chrome and this shell follow the code. ``emit_viewer`` is the same shell,
+    written into a bundle for use without a server.
 
     The shell loads the skeleton JSON, its .atlas, and the atlas image from
     ``skeleton_url``/``atlas_url`` (defaults: the skeleton's own name beside
@@ -63,12 +69,21 @@ def emit_viewer(output_path: str, skeleton_json_path: str | None = None,
         first = ""
         default_skeleton = ""
         default_atlas = ""
-    html = (
+    return (
         TEMPLATE_PATH.read_text(encoding="utf-8")
         .replace("__RUNTIME_URL__", RUNTIME_URL)
         .replace("__FIRST_ANIMATION__", first)
         .replace("__DEFAULT_SKELETON__", default_skeleton)
         .replace("__DEFAULT_ATLAS__", default_atlas)
     )
+
+
+def emit_viewer(output_path: str, skeleton_json_path: str | None = None,
+                skeleton_url: str | None = None,
+                atlas_url: str | None = None) -> str:
+    """Write the reusable viewer shell beside the rig it plays."""
+    html = render_viewer(skeleton_json_path, skeleton_url, atlas_url)
     Path(output_path).write_text(html, encoding="utf-8")
+    # The pane is served on its own, so the shared HUD travels with it.
+    hud_assets.copy(Path(output_path).parent)
     return output_path

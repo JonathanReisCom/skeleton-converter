@@ -3,77 +3,50 @@
 <head>
 <meta charset="utf-8">
 <title>skeleton-converter skelform viewer</title>
+<link rel="stylesheet" href="hud.css">
 <style>
-  :root {
-    --bg: #16181f; --surface: rgba(12,14,19,.78); --border: #343946;
-    --text: #e8eaf0; --muted: #9aa3b5;
-    --skelform: #8f7ee7; --freeze: #e6a23c;
-    --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  }
+  :root { --accent: #b9aef2; --bg: #16181f; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   canvas { width: 100%; height: 100%; display: block; }
-  #hud {
-    position: fixed; top: 44px; left: 10px; z-index: 2;
-    font: 13px/1.5 system-ui, sans-serif; color: var(--text);
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 9px 12px; max-width: 70vw;
-  }
-  #hud .label { font: 11px var(--mono); letter-spacing: .06em;
-                text-transform: uppercase; color: #b9aef2; margin-bottom: 6px; }
-  #hud .label b { color: var(--text); font-weight: 400; text-transform: none;
-                  letter-spacing: 0; }
-  #hud button {
-    font: 12px var(--mono); margin-right: 4px; margin-bottom: 4px;
-    background: transparent; color: var(--muted); border: 1px solid var(--border);
-    border-radius: 999px; padding: 3px 11px; cursor: pointer;
-    transition: background .12s, color .12s, border-color .12s;
-  }
-  #hud button:hover { color: var(--text); border-color: #4a5164; }
-  #hud button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  #hud button.active { background: var(--text); color: #16181f;
-                       border-color: var(--text); font-weight: 700; }
-  #error { color: #ff7b7b; white-space: pre-wrap; margin-top: 6px; }
-  .stats { font: 10px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
+  .rig-stats { font: 10px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
 </style>
 </head>
 <body>
 <canvas id="glcanvas"></canvas>
-<div id="hud">
-  <div class="label">skelform <b id="title">__TITLE__</b> · <span id="clock">t=0.0</span></div>
-  <div id="tracks"></div>
-  <div class="stats" id="stats"></div>
-  <div id="error" hidden></div>
-</div>
 <!-- crossorigin: an error inside a cross-origin classic script is reported
      as "Script error." without it, which hides exactly what a broken rig
      needs to say. jsDelivr serves these with CORS. -->
 <script src="__CDN_JSZIP__" crossorigin="anonymous"></script>
 <script src="__CDN_RUNTIME__" crossorigin="anonymous"></script>
 <script src="__CDN_API__" crossorigin="anonymous"></script>
+<script src="hud.js"></script>
 <script>
 // The rig is played by SkelForm's own web player runtime (skelform-js + the
 // player's api.js), so this pane shows the .skf as its runtimes read it — not
 // a replay through another format. Loading is async: the shell's readiness
 // probe waits for previewPlay, which is defined immediately.
 const SKF_URL = "__SKF_URL__";
+const TITLE = "__TITLE__";
 const canvas = document.getElementById("glcanvas");
-const errorBox = document.getElementById("error");
-const tracks = document.getElementById("tracks");
-const clock = document.getElementById("clock");
 
 let skfc = null;          // the player's per-canvas state (skfCanvases[0])
 let index = new Map();    // animation name -> index
 
-function fail(message) {
-  errorBox.hidden = false;
-  errorBox.textContent = message;
+if (!window.hud) {
+  // A bundle written before the shared HUD existed: the two files sit beside
+  // this page, so the message is actionable instead of a blank pane.
+  document.body.insertAdjacentHTML("beforeend",
+    '<p style="position:fixed;left:8px;bottom:8px;color:#ff7b7b">'
+    + "hud.js is missing beside this viewer — rebuild the bundle.</p>");
+  window.__loadError = "hud.js missing";
+  throw new Error("hud.js missing");
 }
-
-// The player draws from its own rAF loop: an exception inside it stops the
-// canvas for good and, without this, the pane just stays empty. Surface it.
-window.addEventListener("error", (event) => fail("runtime error: " + event.message));
-window.addEventListener("unhandledrejection",
-  (event) => fail("runtime error: " + (event.reason && event.reason.message || event.reason)));
+const nodes = hud.mount({ title: "skelform web" });
+hud.setNote(nodes, TITLE + " · t=0.0");
+hud.watchErrors(nodes);
+const stats = document.createElement("div");
+stats.className = "rig-stats";
+nodes.box.appendChild(stats);
 
 // The canvas needs its DRAWING BUFFER sized to its CSS box: a canvas that
 // only has `width:100%` keeps the 300x150 default buffer, and the player's
@@ -159,11 +132,11 @@ function fit() {
   }
   const [minX, minY, maxX, maxY] = fitBounds;
   const spanX = Math.max(maxX - minX, 1e-3), spanY = Math.max(maxY - minY, 1e-3);
-  // The margin must be the one the Spine pane applies to the same box
-  // (1/zoom with 0.85 in template_spine_viewer.html): the panes are the
-  // comparison's arbiter, and a different margin frames them at different
-  // sizes even when the geometry matches to the unit.
-  const scale = Math.min(width / spanX, height / spanY) * 0.85;
+  // Same call the Spine pane makes: the box and the margin are shared, only
+  // the camera convention (multiply by `scale`, here) is this viewer's own. Two
+  // panes that disagree frame the same geometry at different sizes, which is
+  // exactly what the comparison is supposed to reveal about the RIG.
+  const scale = hud.fitScale(spanX, spanY, width, height);
   const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
   skfc.constructOptions.scale = { x: scale, y: scale };
   skfc.constructOptions.position = {
@@ -180,24 +153,6 @@ function fit() {
     canvas: [width, height], scale,
     position: [skfc.constructOptions.position.x, skfc.constructOptions.position.y],
     world: fitBounds,
-  });
-}
-
-function buildTracks(animations) {
-  tracks.textContent = "";
-  animations.forEach((animation, i) => {
-    index.set(animation.name, i);
-    const button = document.createElement("button");
-    button.textContent = animation.name;
-    button.onclick = () => { previewPlay(animation.name); mark(animation.name); };
-    tracks.appendChild(button);
-  });
-  mark(animations[0] ? animations[0].name : null);
-}
-
-function mark(name) {
-  [...tracks.querySelectorAll("button")].forEach((b) => {
-    b.classList.toggle("active", b.textContent === name);
   });
 }
 
@@ -218,7 +173,7 @@ window.previewPlay = function (name) {
   select(name);
   skfc.animTime = 0;
   skfc.playing = false;
-  mark(name);
+  hud.mark(nodes, name);
 };
 
 window.previewFreeze = function (name, t) {
@@ -226,7 +181,7 @@ window.previewFreeze = function (name, t) {
   select(name);
   skfc.playing = false;
   skfc.animTime = Math.max(0, t) * 1000;
-  mark(name);
+  hud.mark(nodes, name);
 };
 
 // Opened standalone (a bundle's index.html): drive it from its own clock, so
@@ -285,7 +240,11 @@ async function start() {
     // not, so the draw loop throws "visuals is not defined" and the canvas
     // stays empty. Hand it the armature's visuals.
     window.visuals = skfc.armature.visuals;
-    buildTracks(skfc.armature.animations || []);
+    const animations = skfc.armature.animations || [];
+    animations.forEach((animation, i) => index.set(animation.name, i));
+    hud.tracks(nodes, animations.map((a) => a.name), (name) => {
+      window.previewPlay(name);
+    }, animations[0] ? animations[0].name : null);
     // Frame AFTER the runtime has placed the vertices: constructVerts runs per
     // frame and leaves every vert at its bind bone's world, which is the box
     // to frame. Measuring before the first frame framed the STORED local
@@ -302,7 +261,10 @@ async function start() {
     setInterval(refit, 500);
     window.addEventListener("resize", () => { sizeCanvas(); regl(); fit(); });
     setInterval(() => {
-      if (skfc) clock.textContent = "t=" + (skfc.animTime / 1000).toFixed(1);
+      // The clock rides in the HUD's note line, with the file this pane plays.
+      if (skfc) {
+        hud.setNote(nodes, TITLE + " · t=" + (skfc.animTime / 1000).toFixed(1));
+      }
       // What actually loaded: an archive with no active style, or textures
       // that failed to decode, draws nothing and says nothing. Guarded —
       // a diagnostic must never be the thing that breaks the pane.
@@ -317,13 +279,13 @@ async function start() {
           catch (error) { /* lookup itself is what we are probing */ }
         }
         const atlases = skfc.armature.atlases || [];
-        document.getElementById("stats").textContent =
+        stats.textContent =
           skfc.armature.bones.length + " bones · " + visuals + " visuals · "
           + (skfc.armature.styles || []).length + " styles · active "
           + skfc.activeStyles.length + " · tex " + withTex + "/" + visuals
           + " · atlas " + atlases.map((a) => (a.texture ? "gl" : "none")).join(",");
       } catch (error) {
-        document.getElementById("stats").textContent = "stats failed: " + error.message;
+        stats.textContent = "stats failed: " + error.message;
       }
     }, 300);
     document.body.dataset.ready = "1";
@@ -332,7 +294,8 @@ async function start() {
     window.__skelform = { canvases: skfCanvases, get skfc() { return skfc; } };
     window.previewAutoplay();
   } catch (error) {
-    fail("cannot play " + SKF_URL + ": " + (error && error.message ? error.message : error));
+    hud.fail(nodes, "cannot play " + SKF_URL + ": "
+      + (error && error.message ? error.message : error));
   }
 }
 

@@ -308,7 +308,7 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
 ### Distribution
 
 - [ ] Godot editor plugin (right-click `.tscn` → export to Spine)
-- [x] ~~PyPI package~~ — DONE: `pyproject.toml` (PEP 621, stdlib-only, console
+- [x] ~~PyPI package~~ — DONE: `pyproject.toml` (PEP 621, install-free, console
       script `skeleton-converter`); verified by building a wheel, installing it
       in a throwaway venv and running a real conversion from the installed copy
 - [x] CI: GitHub Actions running the fixture-free suite on Python 3.10-3.13

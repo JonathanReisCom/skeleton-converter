@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from . import hud_assets
+
 TEMPLATE_PATH = Path(__file__).parent / "template_skelform_viewer.html"
 
 PLAYER_COMMIT = "cd7451daea40eec177e6687a4c9a89d523d782ea"
@@ -28,6 +30,16 @@ RUNTIME_URL = f"{RUNTIME_BASE}/skelform-js.js"
 API_URL = f"{PLAYER_BASE}/api.js"
 
 
+def render_viewer(skf_url: str) -> str:
+    """The SkelForm viewer shell as text (see ``render_viewer`` in viewer_out)."""
+    return (TEMPLATE_PATH.read_text(encoding="utf-8")
+            .replace("__CDN_JSZIP__", JSZIP_URL)
+            .replace("__CDN_RUNTIME__", RUNTIME_URL)
+            .replace("__CDN_API__", API_URL)
+            .replace("__SKF_URL__", skf_url)
+            .replace("__TITLE__", Path(skf_url).name))
+
+
 def emit_viewer(output_path: str, skf_url: str) -> str:
     """Write the SkelForm viewer shell; it plays ``skf_url``.
 
@@ -35,11 +47,8 @@ def emit_viewer(output_path: str, skf_url: str) -> str:
     shell (``output/<name>.skf``) or an absolute URL — never a filesystem
     path. Nothing is embedded: regenerate nothing when the archive changes.
     """
-    html = (TEMPLATE_PATH.read_text(encoding="utf-8")
-            .replace("__CDN_JSZIP__", JSZIP_URL)
-            .replace("__CDN_RUNTIME__", RUNTIME_URL)
-            .replace("__CDN_API__", API_URL)
-            .replace("__SKF_URL__", skf_url)
-            .replace("__TITLE__", Path(skf_url).name))
+    html = render_viewer(skf_url)
     Path(output_path).write_text(html, encoding="utf-8")
+    # The pane is served on its own, so the shared HUD travels with it.
+    hud_assets.copy(Path(output_path).parent)
     return output_path

@@ -10,7 +10,9 @@ texture path that does not exist.
 import json
 import math
 import re
+from pathlib import Path
 
+from src import bundle, skelform_viewer_out
 from src.in_godot import read_godot_skeleton
 from src.model import Attachment, Bone, Key, Skeleton
 from src.out_godot import write_godot_scene
@@ -201,3 +203,30 @@ def test_skinned_polygon_format_matches_what_godot_renders(tmp_path):
     # One group per triangle (2 triangles from the 6 flat indices).
     groups = re.findall(r'PackedInt32Array\((\d+), (\d+), (\d+)\)', text)
     assert groups == [("0", "1", "2"), ("0", "2", "3")], groups
+
+
+def test_a_viewer_ships_the_shared_hud_beside_it(tmp_path):
+    """A pane is served on its own, so the shared HUD has to travel with it."""
+    rig = tmp_path / "rig.json"
+    rig.write_text(json.dumps({"skeleton": {"spine": "4.3.26"}, "bones": [],
+                               "animations": {}}), encoding="utf-8")
+    bundle.view(str(rig))
+    for name in ("hud.css", "hud.js"):
+        assert (tmp_path / name).is_file(), name
+
+
+def test_the_skelform_viewer_ships_the_same_hud(tmp_path):
+    out = tmp_path / "index.html"
+    skelform_viewer_out.emit_viewer(str(out), "rig.skf")
+    for name in ("hud.css", "hud.js"):
+        assert (tmp_path / name).is_file(), name
+
+
+def test_every_browser_viewer_links_the_shared_hud():
+    """The chrome is one file now: a template that inlines its own HUD again
+    would drift from the others, which is what the pane look is compared on."""
+    for name in ("template_spine_viewer.html", "template_skelform_viewer.html",
+                 "template_godot_viewer.html"):
+        text = (Path("src") / name).read_text(encoding="utf-8")
+        assert 'href="hud.css"' in text, name
+        assert 'src="hud.js"' in text, name

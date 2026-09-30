@@ -16,9 +16,21 @@ one importer and one exporter per format. Currently: Godot Skeleton2D scenes
 
 ## Non-negotiables
 
-- **The converter has zero third-party dependencies.** Python 3.10+ stdlib
-  only. If a feature seems to require a package, it needs a stronger
-  justification than convenience.
+- **Dependencies: free software only, and each one earns its place.** Allowed:
+  permissive open source — MIT, BSD, Apache-2.0, ISC, MPL-2.0, Unlicense, CC0 —
+  for tests, build and runtime alike. Not allowed: proprietary or
+  source-available-only code (free tiers, "free for open source" with strings
+  attached) and copyleft that would relicense this repo (GPL, AGPL, SSPL, BSL).
+  Being free is permission, not a reason: stdlib and platform features come
+  first, and a dependency on the runtime path needs a measured justification.
+- **The converter still runs on a bare `python3`.** `src/cli.py`, the readers,
+  the writers and the studio must work from a fresh checkout with no install
+  step — the README quick start, the CI and the distributed `skill/` all rest
+  on that. Tooling (tests, validation harnesses, whatever generates a committed
+  artifact) may take dependencies freely: declare them (pyproject's
+  `[project.optional-dependencies]`, or the existing `validation/package.json`),
+  pin them, keep them off the runtime path, and record every one that reaches
+  `src/` or a shipped artifact in `THIRD-PARTY.md`.
 - **Never trust a conversion by inspection.** Every conversion claim must be
   backed by a numeric comparison: sample the same animation time on both sides
   and compare bone world positions. Threshold for PASS: < 0.01 units on every
@@ -75,12 +87,37 @@ yourself writing a mirror or a sign flip inside an adapter, move it to the
 model layer — it is almost certainly a cross-format invariant, not a format
 detail.
 
-### Rule: don't vendor third-party runtimes
+### Rule: dev-only runtimes stay dev-only
 
 The optional validation harness depends on `@esotericsoftware/spine-core` via
 npm. That dependency is dev-only, must never be imported by the converter, and
-its license requires that each user obtain their own Spine Editor license. Keep
-the converter stdlib-only so the product itself has no license friction.
+its license requires each user to hold their own Spine Editor license — which is
+precisely why it cannot ride along in `src/`. Judge every dependency twice: is it
+free software, and does it belong on the runtime path?
+
+### Rule: sharing code across the viewers — one real file, copied
+
+The viewers drive different runtimes (SpineCanvas, SkelForm's player, Godot's
+WASM), so nothing about the *engine* is shared. The chrome and the arithmetic
+that has to agree are. Extract a piece when three or more places need it, or
+when two copies must produce the same number — the framing margin is the
+canonical case, since two panes that disagree by 0.001 frame the same geometry
+at different sizes. Share it as one real file copied into each emitted bundle
+(`src/static/<name>.js` + `.css`, referenced beside `index.html`): a job folder
+is served on its own, so a viewer stays self-contained, and a missing shared
+file degrades with a message instead of a blank pane. `src/static/hud.js` +
+`hud.css` are that extraction in practice: the HUD chrome, the track buttons,
+the error box, the attachment explorer and `fitScale` (the margin both panes
+must apply to the same box) live there, and the three viewers keep only their
+own runtime glue. A pane that finds itself embedded (`window.self !==
+window.top`) hides that chrome — the shell owns the controls — while keeping the
+nodes in the DOM, because the shell reads a pane's tracks from there and clicks
+them to drive it. Opened standalone it shows the HUD, which is what makes a
+bundle's `index.html` watchable on its own. A template engine or a
+bundler is allowed under the dependency rule above — but its output is committed
+and reproducible, so a fresh checkout renders the same page with the tool
+uninstalled. Templates stay real `.html` files where practical: editors and
+language tools lint them directly.
 
 ### Rule: the viewer runtime is pinned, and its version is not the data version
 
@@ -202,9 +239,9 @@ Pick an animation with real movement (`walk`, `run`) — some animations such as
 studio (the browser path). A make target per direction was a second, drifting
 copy of both: it was deleted, and adding one back needs a reason beyond
 "it saves typing". Do not add a `package.json` at the repo root or a pnpm/npm
-script to drive Python: the converter's whole promise is "zero third-party
-dependencies", and `validation/package.json` is the only Node manifest — it is
-dev-only and must stay that way.
+script to drive Python: the promise that matters is "a fresh checkout runs on
+`python3` alone", and `validation/package.json` is dev-only tooling — keep it
+that way.
 
 - **`make` runs in the repo root**, which is exactly what `python3 -m src.cli`
   needs. That is why the shortcuts work from any directory while the raw

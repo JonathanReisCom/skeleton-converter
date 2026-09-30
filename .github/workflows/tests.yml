@@ -20,9 +20,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # The converter itself is stdlib-only; pytest is the only test-time tool.
+      # The converter runs on a bare python3; pytest is the only test-time
+      # tool, declared in pyproject's `dev` extra.
       - name: Install test runner
-        run: python3 -m pip install --quiet pytest
+        run: python3 -m pip install --quiet "pytest>=8"
 
       # tests/fixtures/ holds third-party assets and is deliberately not
       # committed, so the fixture-based round-trip tests skip here. The

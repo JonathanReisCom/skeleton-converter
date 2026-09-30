@@ -243,3 +243,57 @@ def test_a_posted_target_no_longer_changes_anything(studio_server, tmp_path):
                                "target": "dragonbones"})
     assert status == 200, data
     assert {entry["target"] for entry in data["targets"]} == {"godot", "skelform"}
+
+
+def test_a_refresh_serves_the_current_viewer_not_the_stored_copy(studio_server,
+                                                                tmp_path):
+    """The conversion is the artifact; the document that plays it is chrome.
+
+    A job's index.html is written once and a browser refresh re-reads the
+    server, so a viewer change has to reach an old job without re-converting.
+    The stored copies are replaced with garbage here: what the server returns
+    must come from the current templates and the current static files.
+    """
+    url, root = studio_server
+    source = tmp_path / "rig"
+    write_spine_export(source)
+    status, data = _post(url, {"files": _upload(source, f"{STEM}.json",
+                                                f"{STEM}.atlas", PAGE)})
+    assert status == 200, data
+    job = root / data["job"]
+    panes = list(data["panes"])
+    assert len(panes) >= 2
+    for pane in panes:
+        (job / pane / "index.html").write_text("STALE SNAPSHOT")
+
+    for pane in panes:
+        status, page = _get(f"{url}/{data['job']}/{pane}/index.html")
+        assert status == 200, pane
+        assert "STALE SNAPSHOT" not in page, pane
+        assert 'src="hud.js"' in page, f"{pane}: viewer from the current template"
+
+    status, compare = _get(url + data["url"])
+    assert status == 200
+    assert "STALE SNAPSHOT" not in compare
+    assert '"kind": "spine"' in compare, "the compare shell is rendered too"
+
+    status, css = _get(f"{url}/{data['job']}/{panes[0]}/hud.css")
+    assert status == 200
+    assert ".embedded" in css, "chrome assets are served live as well"
+
+
+def test_the_live_viewer_finds_an_atlas_txt(tmp_path):
+    """`.atlas.txt` is a supported spelling (Git-hosted rigs ship it), so the
+    live render must not look only for `*.atlas`: a pane rendered without its
+    atlas draws nothing and never publishes its slots, which reads as "the
+    attachment controls are broken".
+    """
+    pane = tmp_path / "1-source-rig-spine"
+    output = pane / "output"
+    output.mkdir(parents=True)
+    (output / "rig.json").write_text('{"skeleton": {"spine": "4.3.26"}, "bones": []}',
+                                     encoding="utf-8")
+    (output / "rig.atlas.txt").write_text("rig.png\nsize: 8, 8\n", encoding="utf-8")
+    html = studio._render_pane(pane)
+    assert html is not None
+    assert "output/rig.atlas.txt" in html, "the atlas has to reach the viewer"

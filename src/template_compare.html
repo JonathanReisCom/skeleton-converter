@@ -13,13 +13,18 @@
   }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
                font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
-  #bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-         background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  #bar .brand { font-family: var(--mono); font-size: 12px; font-weight: 700;
-                letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
-                margin-right: 4px; }
-  #bar .brand em { font-style: normal; color: var(--text); }
-  #tracks { display: flex; gap: 4px; flex-wrap: wrap; }
+  /* One sidebar owns every control; the stage is only panes. A control that
+     lives in two places is a control that can disagree with itself. */
+  body { display: flex; }
+  #side { flex: none; width: 238px; box-sizing: border-box; padding: 10px;
+          background: var(--surface); border-right: 1px solid var(--border);
+          overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  #side .brand { font-family: var(--mono); font-size: 12px; font-weight: 700;
+                 letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #side .brand em { font-style: normal; color: var(--text); }
+  #side .group { display: flex; flex-direction: column; gap: 4px; }
+  #side .group-title { font: 10px var(--mono); letter-spacing: .12em;
+                       text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
   button { font: 12px var(--mono); padding: 4px 12px; border-radius: 999px;
            border: 1px solid var(--border); background: transparent;
            color: var(--muted); cursor: pointer; letter-spacing: .02em;
@@ -35,9 +40,36 @@
   #gridbtn { padding: 4px 10px; }
   #gridbtn.active { background: transparent; border-color: var(--freeze);
                     color: var(--freeze); font-weight: 400; }
-  #stage { display: flex; height: calc(100% - 45px); }
-  .pane { position: relative; flex: 1; border-right: 1px solid #000; }
-  .pane:last-child { border-right: none; }
+  /* Animation buttons stack: one per line, full width, left aligned — a list
+     you scan, not a row you hunt through. */
+  #tracks { display: flex; flex-direction: column; gap: 3px; }
+  #tracks button { width: 100%; text-align: left; border-radius: 8px; }
+  #attachments { display: flex; flex-direction: column; gap: 8px; }
+  #attachments details > summary { cursor: pointer; list-style: none; }
+  #attachments details > summary::-webkit-details-marker { display: none; }
+  #attachments details[open] > summary { color: var(--text); }
+  #attachments .row { display: flex; gap: 6px; align-items: center; margin: 2px 0; }
+  #attachments .row-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                           white-space: nowrap; color: var(--muted);
+                           font-family: var(--mono); font-size: 10px; }
+  #attachments select { flex: 0 0 auto; max-width: 110px; font: 10px var(--mono);
+                        background: var(--bg); color: var(--text);
+                        border: 1px solid var(--border); border-radius: 7px;
+                        padding: 2px 6px; cursor: pointer; }
+  #attachments select:hover { border-color: #4a5164; }
+  #attachments select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
+  /* Quadrant grid: two columns, one row per pair of panes, so each pane gets
+     the same box and the alignment grid/crosshair means the same thing in
+     every one of them. A run with fewer panes than cells keeps the empty
+     quadrant (the fourth format is still to come) instead of stretching the
+     others into a single tall strip. */
+  #stage { flex: 1 1 auto; min-width: 0; display: grid;
+           grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr;
+           gap: 1px; background: #000; }
+  .pane { position: relative; min-width: 0; min-height: 0; background: var(--bg); }
+  .pane[data-empty]::after { content: "empty"; position: absolute; top: 50%; left: 50%;
+           transform: translate(-50%, -50%); font: 11px var(--mono);
+           letter-spacing: .18em; text-transform: uppercase; color: #2b303c; }
   .pane .tag { position: absolute; top: 10px; left: 10px; z-index: 2;
                display: flex; align-items: center; gap: 7px;
                background: rgba(12,14,19,.78); border: 1px solid var(--border);
@@ -78,21 +110,35 @@
 </style>
 </head>
 <body>
-<div id="bar"><span class="brand">skeleton·<em>compare</em></span><span id="tracks">loading…</span>
-  <button id="freezer" title="Freeze all panes at the same time">◆ t=<span id="tval">0.0</span></button>
-<button id="gridbtn" title="Toggle alignment grid over every pane" class="active">⊞ grid</button>
-</div>
+<aside id="side">
+  <div class="brand">skeleton·<em>compare</em></div>
+  <div class="group">
+    <button id="freezer" title="Freeze every pane at the same time">◆ t=<span id="tval">0.0</span></button>
+    <button id="gridbtn" title="Toggle the alignment grid over every pane" class="active">⊞ grid</button>
+  </div>
+  <div class="group">
+    <div class="group-title">animations</div>
+    <div id="tracks">loading…</div>
+  </div>
+  <div class="group" id="attachments-group" hidden>
+    <div class="group-title">attachments</div>
+    <div id="attachments"></div>
+  </div>
+</aside>
 <div id="stage"></div>
 <script>
 "use strict";
-// Compare shell: N typed panes (godot / spine) side by side with shared
-// controls. Each pane is driven through the protocol it already publishes —
-// previewPlay/previewFreeze (Godot wrapper) and window.__state (Spine
-// viewer). Iframes are same-origin (one http.server serves the parent
-// folder), so the parent may reach into them directly.
+// Compare shell: N typed panes (godot / spine / skelform) laid out in a
+// quadrant grid — source first — with every control in the left sidebar. Each
+// pane is driven through the protocol it already publishes — previewPlay/
+// previewFreeze (Godot wrapper) and window.__state (Spine viewer). Iframes are
+// same-origin (one http.server serves the parent folder), so the parent may
+// reach into them directly.
 const PANES = __PANES__;
 const stage = document.getElementById("stage");
 const tracksBox = document.getElementById("tracks");
+const attachmentsBox = document.getElementById("attachments");
+const attachmentsGroup = document.getElementById("attachments-group");
 const tval = document.getElementById("tval");
 
 let frozen = false;
@@ -128,6 +174,16 @@ document.getElementById("gridbtn").onclick = (e) => {
 // start with the grid visible
 frames.forEach(f => f.grid.style.display = "");
 
+// Quadrant grid: pad the last row so a run with fewer panes than cells keeps
+// its empty quadrants instead of stretching the panes it does have.
+for (let spare = frames.length; spare < Math.max(4, Math.ceil(frames.length / 2) * 2); spare += 1) {
+  const cell = document.createElement("div");
+  cell.className = "pane";
+  cell.dataset.empty = "1";
+  cell.title = "no format here yet";
+  stage.appendChild(cell);
+}
+
 function whenLoaded(iframe, test, attempt) {
   attempt = attempt || 0;
   if (attempt > 300) return Promise.reject(new Error("timeout"));
@@ -159,13 +215,105 @@ function paneAlive(i) {
 function paneAnimNames(pane) {
   // A Godot wrapper builds its track buttons from window.previewAnims and a
   // SkelForm pane builds them from the archive's animations; either way the
-  // names are readable from its DOM (same origin).
+  // names are readable from its DOM (same origin). Read the HUD's track box
+  // first: a pane's own controls ("attachments") are buttons too, and reading
+  // them as animation names put a fake track in the shell's bar.
   try {
-    const names = [...pane.iframe.contentDocument
-      .querySelectorAll("button")].map(b => b.textContent);
+    const doc = pane.iframe.contentDocument;
+    const inTracks = [...doc.querySelectorAll(".hud .tracks button")];
+    const buttons = inTracks.length ? inTracks : [...doc.querySelectorAll("button")];
+    const names = buttons.map(b => b.textContent);
     return names.length ? names : null;
   } catch (e) { return null; }
 }
+
+// The attachment explorer, in the sidebar: ONE row per slot, driving every
+// pane that has that slot. The panes report their own slots (their runtimes are
+// the only ones that know them), and the rows are merged by slot name — a slot
+// is the same slot in every pane, so a select that moved one side and not the
+// other would be a comparison of two different rigs. Option names are matched
+// loosely across panes: Godot sanitizes what Spine keeps verbatim
+// (`Eye_Anger` -> `Eye_anger`), and only the pane can name its own entry.
+function slotKey(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function buildAttachments() {
+  const slots = new Map();
+  frames.forEach((f, i) => {
+    if (!paneAlive(i)) return;
+    let rows = null;
+    try {
+      rows = paneReady[i].__attachmentRows ? paneReady[i].__attachmentRows() : null;
+    } catch (e) { return; }
+    (rows || []).forEach(row => {
+      const key = slotKey(row.name);
+      let slot = slots.get(key);
+      if (!slot) {
+        slot = { name: row.name, options: [], panes: [], value: "" };
+        slots.set(key, slot);
+      }
+      slot.panes.push(row);
+      if (!slot.value && row.value) slot.value = row.value;
+      (row.options || []).forEach(option => {
+        if (!slot.options.some(known => slotKey(known) === slotKey(option))) {
+          slot.options.push(option);
+        }
+      });
+    });
+  });
+
+  attachmentsBox.textContent = "";
+  const group = document.createElement("details");
+  group.open = true;
+  const title = document.createElement("summary");
+  title.className = "group-title";
+  title.textContent = "slots (" + slots.size + ")";
+  group.appendChild(title);
+
+  slots.forEach(slot => {
+    const line = document.createElement("div");
+    line.className = "row";
+    const name = document.createElement("span");
+    name.className = "row-name";
+    name.textContent = slot.name;
+    name.title = slot.name + " — applied to every pane";
+    const select = document.createElement("select");
+    const none = document.createElement("option");
+    none.textContent = "(none)";
+    // Sem `value`, o "nenhum" vale a string "(none)" — e escolher nenhum
+    // anexo não aplicava nada em painel nenhum.
+    none.value = "";
+    select.appendChild(none);
+    slot.options.forEach(option => {
+      const o = document.createElement("option");
+      o.textContent = option;
+      select.appendChild(o);
+    });
+    select.value = slot.value || "";
+    select.onchange = () => {
+      // Every pane gets the pick, translated into its own spelling of that
+      // attachment. A pane that does not carry it is left alone rather than
+      // blanked: an entry missing on one side is a conversion finding, and
+      // erasing it would hide it.
+      const wanted = slotKey(select.value);
+      slot.panes.forEach(row => {
+        if (!select.value) { row.onPick(""); return; }
+        const own = (row.options || []).find(o => slotKey(o) === wanted);
+        if (own) row.onPick(own);
+      });
+    };
+    line.appendChild(name);
+    line.appendChild(select);
+    group.appendChild(line);
+  });
+  attachmentsBox.appendChild(group);
+  attachmentsGroup.hidden = slots.size === 0;
+}
+
+// A pane that learns its slots late (the Godot wrapper gets them from GDScript
+// once the scene is up) asks the shell to redraw them.
+window.__attachmentsChanged = buildAttachments;
 
 Promise.all(ready).then((ws) => {
   paneReady = ws;
@@ -190,6 +338,7 @@ Promise.all(ready).then((ws) => {
       if (names) break;
     }
   }
+  buildAttachments();
   if (!names) { tracksBox.textContent = "(waiting for animation names)"; return; }
   tracksBox.textContent = "";
   names.forEach(name => {

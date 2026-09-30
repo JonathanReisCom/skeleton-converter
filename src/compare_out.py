@@ -42,6 +42,20 @@ def _kind(bundle: Path) -> str:
     return "godot"
 
 
+def render_compare(*bundles: Path) -> str:
+    """The compare shell as text (see ``render_viewer`` in viewer_out)."""
+    if len(bundles) < 2:
+        raise ValueError("compare needs at least 2 bundle folders")
+    panes = []
+    for bundle in bundles:
+        kind = _kind(bundle)
+        panes.append({"label": bundle.name, "url": f"{bundle.name}/index.html",
+                      "kind": kind})
+    html = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # `</` closes the inline script it sits in, so escape it before injecting.
+    return html.replace("__PANES__", json.dumps(panes).replace("</", "<\\/"))
+
+
 def emit_compare(*bundles: Path) -> Path:
     """Write compare.html into the parent folder of the bundles; return its path.
 
@@ -59,10 +73,7 @@ def emit_compare(*bundles: Path) -> Path:
             raise ValueError(
                 "compare needs all bundles under one parent folder "
                 f"(got {[str(d) for d in dirs]})")
-    panes = [{"label": d.name, "url": f"{d.name}/index.html",
-              "kind": _kind(d)} for d in dirs]
-    html = TEMPLATE_PATH.read_text(encoding="utf-8").replace(
-        "__PANES__", json.dumps(panes).replace("</", "<\\/"))
+    html = render_compare(*bundles)
     out = parent / "compare.html"
     out.write_text(html, encoding="utf-8")
     return out

@@ -37,8 +37,8 @@ python3 -m src.cli compare --format godot rig_a.tscn rig_b.tscn
 python3 -m src.cli compare --format spine a.json b.json
 ```
 
-Requires `python3` (3.10+; the converter itself has zero third-party
-dependencies). Optional extras: the Godot 4 binary (`GODOT_BIN` env var)
+Requires `python3` 3.10+ and nothing else — no install step, no runtime
+dependencies. Optional extras: the Godot 4 binary (`GODOT_BIN` env var)
 enables the Spine→Godot web preview (the studio's Godot pane and the
 `preview/` folder a `--to godot` conversion writes); `node` plus one
 `npm install` inside `validation/` enables the dev-only Spine-runtime
@@ -171,6 +171,13 @@ Semantics worth knowing when debugging a frozen compare:
 
 ## Attachment explorer (both panes)
 
+**Inside a compare shell the panes hide their own chrome** — the shell's bar is
+the control surface (tracks, master clock, freeze), so a second set of buttons
+driving the same thing would just be noise. The explorer travels with that
+chrome: it is available when a pane is opened on its own (a bundle's
+`index.html`, or `view`), not in the compare grid. To bring it back inside the
+grid, drop `.embedded .hud-toggle` from the hide rule in `src/static/hud.css`.
+
 A slot's skin map holds *many* attachments (eye shapes, hair, props), not one.
 The model keeps them all — `Attachment.slot` names the owner, `Attachment.name`
 is the skin entry verbatim, `Attachment.setup` marks the slot's setup attachment
@@ -220,8 +227,10 @@ residual is the runtime's 10-step bezier table, not a conversion error.
   `validate-roundtrip.sh`), and run the mesh parity gate for skin questions.
 - Round-trip tests (`A → model → A`) are the regression gate. A failing
   round-trip means the conversion is wrong, not that the tolerance is tight.
-- Zero third-party dependencies in the converter itself; the Spine runtime is
-  dev-only validation tooling and must never be imported by it.
+- No runtime dependencies in the converter: it must run on a bare `python3`.
+  The Spine runtime is dev-only validation tooling and must never be imported
+  by it. Everywhere else, dependencies follow the free-software rule in
+  `AGENTS.md`.
 
 ## Known limitations
 

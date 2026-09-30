@@ -20,8 +20,13 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Graphics :: Editors :: Vector-Based",
 ]
-# The converter is stdlib-only by design (see AGENTS.md); this list stays empty.
+# The runtime path is install-free by design (see AGENTS.md): everything under
+# src/ must work on a bare python3. This list stays empty for that reason;
+# tooling dependencies are declared below.
 dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://github.com/JonathanReisCom/skeleton-converter"
@@ -38,5 +43,5 @@ packages = ["src", "src.godot_preview"]
 [tool.setuptools.package-data]
 # The viewer shells are read at runtime; a wheel without them cannot emit a
 # preview. Same for the Godot wrapper project files.
-src = ["*.html"]
+src = ["*.html", "static/*.js", "static/*.css"]
 "src.godot_preview" = ["*.tscn", "*.gd", "*.cfg", "project.godot"]

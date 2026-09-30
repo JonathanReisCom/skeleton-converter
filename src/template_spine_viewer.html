@@ -3,81 +3,17 @@
 <head>
 <meta charset="utf-8">
 <title>skeleton-converter viewer</title>
+<link rel="stylesheet" href="hud.css">
 <style>
-  :root {
-    --bg: #16181f; --surface: rgba(12,14,19,.78); --border: #343946;
-    --text: #e8eaf0; --muted: #9aa3b5;
-    --spine: #f4801f; --freeze: #e6a23c;
-    --mono: ui-monospace, "SF Mono", Menlo, monospace;
-  }
+  :root { --accent: #f0b27a; --bg: #16181f; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   canvas { width: 100%; height: 100%; display: block; touch-action: none; }
-  #hud {
-    position: fixed; top: 44px; left: 10px; z-index: 2;
-    font: 13px/1.5 system-ui, sans-serif; color: var(--text);
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 9px 12px;
-  }
-  #hud .label { font: 11px var(--mono); letter-spacing: .06em;
-                text-transform: uppercase; color: #f0b27a; margin-bottom: 6px; }
-  #hud .label b { color: var(--text); font-weight: 400; text-transform: none;
-                  letter-spacing: 0; }
-  #hud button {
-    font: 12px var(--mono); margin-right: 4px; margin-bottom: 4px;
-    background: transparent; color: var(--muted); border: 1px solid var(--border);
-    border-radius: 999px; padding: 3px 11px; cursor: pointer;
-    transition: background .12s, color .12s, border-color .12s;
-  }
-  #hud button:hover { color: var(--text); border-color: #4a5164; }
-  #hud button:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  #hud button.active { background: var(--text); color: #16181f;
-                       border-color: var(--text); font-weight: 700; }
-  #error { color: #ff7b7b; white-space: pre-wrap; }
-  #slots {
-    position: fixed; top: 82px; right: 10px; z-index: 2;
-    font: 12px/1.4 system-ui, sans-serif; color: var(--text);
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 14px; padding: 9px 12px;
-    max-height: 90vh; overflow: auto; width: 260px;
-  }
-  #slots .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
-  #slots .slot-name {
-    flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; color: var(--muted);
-    font-family: var(--mono); font-size: 11px;
-  }
-  #slots select {
-    flex: 0 0 auto; max-width: 140px; font: 11px var(--mono);
-    background: #22252e; color: var(--text); border: 1px solid var(--border);
-    border-radius: 7px; padding: 3px 8px; cursor: pointer;
-  }
-  #slots select:hover { border-color: #4a5164; }
-  #slots select:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  #slots-toggle {
-    position: fixed; top: 44px; right: 10px; z-index: 3;
-    font: 11px var(--mono); letter-spacing: .05em; text-transform: uppercase;
-    background: var(--surface); color: var(--muted);
-    border: 1px solid var(--border); border-radius: 999px;
-    padding: 5px 13px; cursor: pointer;
-    transition: background .12s, color .12s, border-color .12s;
-  }
-  #slots-toggle:hover { color: var(--text); border-color: #4a5164; }
-  #slots-toggle:focus-visible { outline: 2px solid var(--freeze); outline-offset: 1px; }
-  #slots-toggle.active { background: var(--text); color: #16181f;
-                         border-color: var(--text); font-weight: 700; }
-  @media (prefers-reduced-motion: reduce) { #hud button { transition: none; } }
 </style>
 </head>
 <body>
 <canvas id="canvas"></canvas>
-<div id="hud">
-  <div class="label"><b>spine 4.2</b> · <span id="name">…</span></div>
-  <div id="tracks" style="white-space: nowrap"></div>
-  <div id="error"></div>
-</div>
-<button id="slots-toggle" title="Toggle attachment explorer">attachments</button>
-<div id="slots" hidden></div>
 <script src="__RUNTIME_URL__"></script>
+<script src="hud.js"></script>
 <script>
 "use strict";
 // Skeleton: ?skeleton=<name>.json wins; otherwise the default baked into this
@@ -97,30 +33,27 @@ const ATLAS_URL = ATLAS_PARAM || "__DEFAULT_ATLAS__"
 const FIRST_ANIMATION = "__FIRST_ANIMATION__";
 
 const canvas = document.getElementById("canvas");
-const errorBox = document.getElementById("error");
-const tracksBox = document.getElementById("tracks");
-const nameBox = document.getElementById("name");
-let state = null, skeleton = null, activeButton = null;
-
-window.addEventListener("error", e => {
-  errorBox.textContent += (e.message || e.error) + "\\n";
-});
+if (!window.hud) {
+  // A bundle written before the shared HUD existed: the two files sit beside
+  // this page, so the message is actionable instead of a blank pane.
+  document.body.insertAdjacentHTML("beforeend",
+    '<p id="error" style="position:fixed;left:8px;bottom:8px;color:#ff7b7b">'
+    + "hud.js is missing beside this viewer — rebuild the bundle.</p>");
+  window.__loadError = "hud.js missing";
+  throw new Error("hud.js missing");
+}
+const nodes = hud.mount({ title: "spine 4.2" });
+hud.watchErrors(nodes);
+const explorer = hud.explorer();
+let state = null, skeleton = null;
 
 function showTracks(animStateData) {
   const names = animStateData.skeletonData.animations.map(a => a.name);
-  names.forEach(name => {
-    const b = document.createElement("button");
-    b.textContent = name;
-    b.onclick = () => setAnimation(name, b);
-    tracksBox.appendChild(b);
-    if (name === FIRST_ANIMATION) setAnimation(name, b);
-  });
+  hud.tracks(nodes, names, setAnimation, FIRST_ANIMATION);
 }
 
-function setAnimation(name, button) {
-  if (activeButton) activeButton.classList.remove("active");
-  if (button) button.classList.add("active");
-  activeButton = button;
+function setAnimation(name) {
+  hud.mark(nodes, name);
   state.setAnimation(0, name, true);
 }
 
@@ -129,16 +62,13 @@ function setAnimation(name, button) {
 // Some rigs (template dummies) leave color objects unequipped — setup is
 // None and no attachment timeline equips them; this panel lets the user
 // toggle them like the Spine Editor's slot checkboxes.
-function showAttachments(skeleton) {
-  const box = document.getElementById("slots");
-  const toggle = document.getElementById("slots-toggle");
-  const render = () => {
-    box.hidden = !box.hidden;
-    toggle.classList.toggle("active", !box.hidden);
-  };
-  toggle.onclick = render;
-  box.innerHTML = "";
+// The rows the explorer shows, built here because only this pane's runtime
+// knows its slots. The compare shell asks for them (__attachmentRows) and draws
+// them in its own sidebar, so the control exists whether this pane is embedded
+// or opened alone.
+function attachmentRows(skeleton) {
   const skins = skeleton.data.skins || [];
+  const rows = [];
   skeleton.slots.forEach(slot => {
     const idx = slot.data.index;
     const names = new Set();
@@ -147,31 +77,20 @@ function showAttachments(skeleton) {
       if (map) Object.keys(map).forEach(n => names.add(n));
     });
     if (!names.size) return;
-    const row = document.createElement("div");
-    row.className = "row";
-    const label = document.createElement("span");
-    label.className = "slot-name";
-    label.textContent = slot.data.name;
-    label.title = slot.data.name;
-    const sel = document.createElement("select");
-    const none = document.createElement("option");
-    none.textContent = "(none)";
-    sel.appendChild(none);
-    [...names].sort().forEach(n => {
-      const o = document.createElement("option");
-      o.textContent = n;
-      sel.appendChild(o);
+    rows.push({
+      name: slot.data.name,
+      options: [...names].sort(),
+      value: slot.attachment ? slot.attachment.name : "",
+      onPick: (value) => slot.setAttachment(value
+        ? skeleton.data.defaultSkin.getAttachment(idx, value) : null),
     });
-    sel.value = slot.attachment ? slot.attachment.name : "";
-    sel.onchange = () => {
-      const att = sel.value
-        ? skeleton.data.defaultSkin.getAttachment(idx, sel.value) : null;
-      slot.setAttachment(att);
-    };
-    row.appendChild(label);
-    row.appendChild(sel);
-    box.appendChild(row);
   });
+  return rows;
+}
+
+function showAttachments(skeleton) {
+  window.__attachmentRows = () => attachmentRows(skeleton);
+  hud.explorerRows(explorer, attachmentRows(skeleton));
 }
 
 new spine.SpineCanvas(canvas, {
@@ -180,8 +99,7 @@ new spine.SpineCanvas(canvas, {
   app: {
     loadAssets: (app) => {
       if (!SKELETON_URL || !SKELETON_URL.endsWith(".json")) {
-        errorBox.textContent =
-          "No skeleton found. Open with ?skeleton=<name>.json";
+        hud.fail(nodes, "No skeleton found. Open with ?skeleton=<name>.json");
         window.__loadError = "no skeleton url";
         return;
       }
@@ -189,10 +107,9 @@ new spine.SpineCanvas(canvas, {
         // No atlas was shipped with this rig, so there is nothing to texture
         // the attachments with. Say that instead of asking for a file that
         // was never there, and let a compare shell see the pane is done.
-        errorBox.textContent =
-          "No atlas for this rig — it was built without one, so the poses "
-          + "animate but nothing is textured. Rebuild with the .atlas and "
-          + "its page image.";
+        hud.fail(nodes, "No atlas for this rig — it was built without one, so "
+          + "the poses animate but nothing is textured. Rebuild with the "
+          + ".atlas and its page image.");
         window.__loadError = "no atlas";
         return;
       }
@@ -204,15 +121,15 @@ new spine.SpineCanvas(canvas, {
       const atlas = assetManager.get(ATLAS_URL);
       if (!atlas) {
         // loadAssets already explained a rig that shipped without an atlas;
-        // overwriting that here would bury the real reason behind a vaguer one.
+        // hud.fail keeps the first reason, which is the specific one.
         window.__loadError = ATLAS_URL
           ? "atlas failed to load: " + ATLAS_URL : "no atlas was shipped";
-        if (!errorBox.textContent) errorBox.textContent = window.__loadError;
+        hud.fail(nodes, window.__loadError);
         return;
       }
       const json = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
       skeleton = new spine.Skeleton(json.readSkeletonData(assetManager.get(SKELETON_URL)));
-      nameBox.textContent = SKELETON_URL;
+      hud.setNote(nodes, SKELETON_URL);
 
       state = new spine.AnimationState(new spine.AnimationStateData(skeleton.data));
       state.apply(skeleton);
@@ -231,12 +148,11 @@ new spine.SpineCanvas(canvas, {
       // canvas measured at that moment — a default 300x150 buffer framed the
       // whole rig into a corner.
       //
-      // `zoom` scales the viewport DOWN, so the screen scale is 1/zoom in
-      // BACKING pixels: divide by the device pixel ratio to compare it with the
-      // CSS-space fit the SkelForm pane does. Same 0.85 margin on both sides —
-      // the panes are the comparison's arbiter, and a different box or margin
-      // frames them at different sizes even when the geometry matches to the
-      // unit.
+      // The box and the margin come from hud.fitScale, the same call the
+      // SkelForm pane makes, so the two panes cannot drift apart. The camera
+      // convention is this viewer's own: `zoom` scales the viewport DOWN
+      // (screen scale = 1/zoom in BACKING pixels), so the CSS-pixel scale is
+      // divided by the device pixel ratio.
       window.__fit = () => {
         const offset = new spine.Vector2(), size = new spine.Vector2();
         // Measure the SETUP pose, exactly like the SkelForm pane does. A box
@@ -250,8 +166,7 @@ new spine.SpineCanvas(canvas, {
         const cssHeight = Math.max(canvas.clientHeight, 1);
         const dpr = canvas.width / cssWidth || 1;
         camera.position.set(offset.x + size.x / 2, offset.y + size.y / 2, 0);
-        camera.zoom = Math.max(size.x / cssWidth, size.y / cssHeight)
-          / (dpr * 0.85);
+        camera.zoom = 1 / (hud.fitScale(size.x, size.y, cssWidth, cssHeight) * dpr);
       };
       // The pane is laid out AFTER this runs, and the iframe's own resize event
       // can fire before the listener exists — so refit whenever the canvas
@@ -313,8 +228,8 @@ new spine.SpineCanvas(canvas, {
     },
     error: (app, errors) => {
       window.__loadError = Object.entries(errors)
-        .map(([path, msg]) => path + ": " + msg).join("\\n");
-      errorBox.textContent = window.__loadError;
+        .map(([path, msg]) => path + ": " + msg).join("\n");
+      hud.fail(nodes, window.__loadError);
     }
   }
 });

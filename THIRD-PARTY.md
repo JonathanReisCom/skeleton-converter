@@ -1,7 +1,10 @@
 # Third-party formats and terms
 
-This tool reads and writes data files. It contains no third-party code and no
-third-party runtimes. The formats themselves are listed here for transparency.
+This tool reads and writes data files, and today it ships no third-party code.
+Every dependency that reaches the runtime path (`src/`) or a shipped artifact is
+recorded here with its license and what it replaces — that is what makes the
+dependency rule in `AGENTS.md` checkable instead of aspirational. The formats
+themselves are listed here for transparency.
 
 ## Godot `.tscn` scenes
 

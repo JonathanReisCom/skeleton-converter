@@ -16,6 +16,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .. import hud_assets
+
 WRAPPER = Path(__file__).parent
 DEFAULT_GODOT = "/Applications/Godot.app/Contents/MacOS/Godot"
 
@@ -46,6 +48,18 @@ def _prepare_wrapper(project: Path, scene_res: str) -> None:
     (project / "main.gd").write_text(main.replace("__SCENE__", scene_res))
 
 
+def render_shell(config: str, runtime_url: str) -> str:
+    """Our wrapper shell for an exported scene, as text.
+
+    Written into the export for use without a server, and rendered per request
+    by the studio so the chrome is never a stale copy.
+    """
+    shell = (Path(__file__).parent.parent /
+             "template_godot_viewer.html").read_text(encoding="utf-8")
+    return (shell.replace("__GODOT_CONFIG__", config)
+                 .replace("__GODOT_RUNTIME_URL__", runtime_url))
+
+
 def _run_export(project: Path, out_dir: Path, godot: str) -> None:
     """Export the wrapper, replace the boilerplate html with our shell, and
     distribute: engine files to the output root, scene artifacts in output/."""
@@ -66,17 +80,18 @@ def _run_export(project: Path, out_dir: Path, godot: str) -> None:
     html = generated.read_text(encoding="utf-8")
     config = _extract_boot_config(html)
     runtime_url = _extract_runtime_url(html)
-    shell = (Path(__file__).parent.parent /
-             "template_godot_viewer.html").read_text(encoding="utf-8")
     out_dir.joinpath("index.html").write_text(
-        shell.replace("__GODOT_CONFIG__", config)
-             .replace("__GODOT_RUNTIME_URL__", runtime_url),
-        encoding="utf-8",
-    )
+        render_shell(config, runtime_url), encoding="utf-8")
+    # The engine's own page is kept beside the shell: it carries the boot
+    # config, and re-reading it is how the studio re-renders this shell live
+    # (the export stays frozen, the chrome does not).
+    out_dir.joinpath("engine.index.html").write_text(html, encoding="utf-8")
     for build_file in list(build_dir.iterdir()):
         if build_file.name == "index.html":
             continue  # the boilerplate html; our shell replaces it
         shutil.move(str(build_file), str(out_dir / build_file.name))
+    # The pane is served on its own, so the shared HUD travels with it.
+    hud_assets.copy(out_dir)
 
 
 def _finish(project: Path, out_dir: Path) -> None:

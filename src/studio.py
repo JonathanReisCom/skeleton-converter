@@ -43,8 +43,9 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import (bundle, compare_out, detect, registry,
+from . import (bundle, compare_out, detect, hud_assets, registry,
                skelform_viewer_out, viewer_out)
+from . import godot_preview
 from .devserver import NoCacheHandler
 from .godot_preview import ExportError, preview_scene
 
@@ -368,6 +369,77 @@ def _render_page(root: Path) -> bytes:
     return html.encode("utf-8")
 
 
+CONTENT_TYPES = {"hud.css": "text/css; charset=utf-8",
+                "hud.js": "text/javascript; charset=utf-8"}
+
+
+def _render_pane(pane: Path) -> str | None:
+    """The viewer for what a pane folder holds, rendered from the current code.
+
+    Which viewer is not recorded anywhere: the pane's own contents say it. A
+    written archive is SkelForm's, an engine page next to it is Godot's, a
+    skeleton JSON is Spine's.
+    """
+    output = pane / "output"
+    skf = next(iter(sorted(output.glob("*.skf"))), None)
+    if skf is not None:
+        return skelform_viewer_out.render_viewer(f"output/{skf.name}")
+    engine = pane / "engine.index.html"
+    if engine.is_file():
+        page = engine.read_text(encoding="utf-8")
+        return godot_preview.render_shell(godot_preview._extract_boot_config(page),
+                                          godot_preview._extract_runtime_url(page))
+    rig = next((p for p in sorted(output.glob("*.json"))
+                if detect.detect_format(p) == "spine"), None)
+    if rig is None:
+        return None
+    # `.atlas` or `.atlas.txt` — the same rule the pane's own copy uses, or a
+    # rig whose atlas carries the text extension renders untextured.
+    atlas = next((p for p in sorted(output.iterdir()) if ".atlas" in p.name), None)
+    return viewer_out.render_viewer(
+        skeleton_json_path=str(rig), skeleton_url=f"output/{rig.name}",
+        atlas_url=f"output/{atlas.name}" if atlas else None)
+
+
+def _live_document(root: Path, route: str) -> tuple[bytes, str] | None:
+    """(body, content type) for a job's VIEW documents, or None.
+
+    A job folder holds two different things: what the conversion wrote — the
+    artifact, which stays frozen — and the documents that play it, which are
+    chrome. Chrome follows the code, so it is rendered on every request and
+    never served as a snapshot: a browser refresh then shows the current
+    viewer without re-converting anything. Standalone bundles (the CLI's
+    output, served by any static server) keep the written copies, which is
+    what makes them self-contained.
+    """
+    parts = [p for p in route.split("/") if p]
+    if len(parts) < 2:
+        return None
+    job, rest = root / parts[0], parts[1:]
+    if not (job / "upload").is_dir():
+        return None
+    name = rest[-1]
+    if name not in ("index.html", "compare.html") and name not in hud_assets.ASSETS:
+        return None
+    _reload_src()
+    if name in hud_assets.ASSETS:
+        return hud_assets.read(name), CONTENT_TYPES[name]
+    if name == "compare.html":
+        panes = sorted(p for p in job.iterdir()
+                       if p.is_dir() and p.name[:1].isdigit())
+        if len(panes) < 2:
+            return None
+        return (compare_out.render_compare(*panes).encode("utf-8"),
+                "text/html; charset=utf-8")
+    pane = job / rest[0] if len(rest) > 1 else None
+    if pane is None:
+        return None
+    html = _render_pane(pane)
+    if html is None:
+        return None
+    return html.encode("utf-8"), "text/html; charset=utf-8"
+
+
 class StudioHandler(NoCacheHandler):
     """The dev-server handler plus the studio API routes."""
 
@@ -391,10 +463,22 @@ class StudioHandler(NoCacheHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802 (http.server's interface)
-        if self.path.split("?")[0] in ("/", "/index.html"):
+        route = self.path.split("?")[0]
+        if route in ("/", "/index.html"):
             body = _render_page(self.root)
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        # Inside a job, the documents that PLAY the conversion are rendered
+        # now; only what the conversion wrote is served as it was written.
+        live = _live_document(self.root, route)
+        if live is not None:
+            body, content_type = live
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
