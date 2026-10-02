@@ -43,8 +43,8 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import (bundle, compare_out, detect, hud_assets, in_spine, registry,
-               skelform_viewer_out, viewer_out)
+from . import (bundle, compare_out, detect, dragonbones_viewer_out, hud_assets,
+               in_dragonbones, in_spine, registry, skelform_viewer_out, viewer_out)
 from . import godot_preview
 from .devserver import NoCacheHandler
 from .godot_preview import ExportError, preview_scene
@@ -58,7 +58,7 @@ TEMPLATE = Path(__file__).parent / "template_studio.html"
 PROXY = "spine"
 # .tres carries animations, not a scene: there is nothing to look at, so the
 # studio does not offer it (the CLI does).
-TARGETS = ("spine", "godot", "skelform")
+TARGETS = ("spine", "godot", "skelform", "dragonbones")
 TARGET_HINTS = {
     "spine": "writes <name>.json + .atlas + the page + a viewer — the pane plays "
              "the Spine runtime reading what this leg wrote.",
@@ -66,6 +66,9 @@ TARGET_HINTS = {
              "pane plays the scene in the real engine (WASM).",
     "skelform": "writes one <name>.skf with its pages inside, and the pane "
                 "plays that archive in SkelForm's own web player.",
+    "dragonbones": "writes <name>_ske.json + <name>_tex.json + the page, and "
+                   "the pane plays them in DragonBones' own runtime — the same "
+                   "files LoongBones imports.",
 }
 COMPANION_SUFFIXES = (".atlas", ".atlas.txt", ".png", ".import", ".md")
 MAX_UPLOAD = 64 * 1024 * 1024
@@ -228,12 +231,61 @@ def _copy_skelform_pane(job: Path, index: int, rig: Path, name: str) -> Path:
     return pane
 
 
+def _copy_dragonbones_pane(job: Path, index: int, rig: Path, uploads: list,
+                           name: str, log: list) -> Path:
+    """A pane for a DragonBones source: the uploaded bundle, played as it is.
+
+    The format's own runtime reads the three files a bundle is made of, so this
+    pane needs no conversion — the data, its texture atlas and the page travel
+    as they were uploaded, under the names the atlas declares.
+    """
+    pane = job / f"{index}-source-{_slug(name)}-dragonbones"
+    output = pane / "output"
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / rig.name
+    target.write_bytes(rig.read_bytes())
+    atlas_path = in_dragonbones.find_texture_atlas(str(rig))
+    if atlas_path is None:
+        log.append("note: no _tex.json beside the DragonBones data — the pane "
+                   "will draw the rig untextured")
+    atlas = Path(atlas_path) if atlas_path else None
+    page = None
+    if atlas is not None:
+        (output / atlas.name).write_bytes(atlas.read_bytes())
+        declared = _dragonbones_page(atlas)
+        page = next((p for p in uploads if p.name == declared), None)
+        if page is None:
+            sibling = rig.parent / declared
+            page = sibling if declared and sibling.is_file() else None
+        if page is None:
+            log.append(f"note: the atlas names the page {declared!r}, which was "
+                       "not uploaded — the pane will draw the rig untextured")
+        else:
+            (output / page.name).write_bytes(page.read_bytes())
+    dragonbones_viewer_out.emit_viewer(
+        str(pane / "index.html"),
+        f"output/{target.name}",
+        f"output/{atlas.name}" if atlas else f"output/{target.name}",
+        f"output/{page.name}" if page else "")
+    return pane
+
+
+def _dragonbones_page(atlas: Path) -> str:
+    """The page image a `_tex.json` declares."""
+    try:
+        return str(json.loads(atlas.read_text(encoding="utf-8")).get("imagePath") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def _source_pane(job: Path, rig: Path, fmt: str, uploads: list, name: str,
                  godot_bin, log: list, skin: str | None = None) -> Path:
     if fmt == "spine":
         return _copy_spine_pane(job, 1, rig, uploads, log, skin=skin)
     if fmt == "skelform":
         return _copy_skelform_pane(job, 1, rig, name)
+    if fmt == "dragonbones":
+        return _copy_dragonbones_pane(job, 1, rig, uploads, name, log)
     if fmt == "godot":
         pane = _godot_pane(job, 1, rig, name, godot_bin, log)
         if pane is not None:
@@ -410,7 +462,8 @@ def convert_request(root: Path, payload: dict, godot_bin=None) -> dict:
 
 def _render_page(root: Path) -> bytes:
     targets = [{"name": name, "hint": TARGET_HINTS.get(name, ""),
-                "frames": name == "skelform"} for name in TARGETS]
+                "frames": name in ("skelform", "dragonbones")}
+               for name in TARGETS]
     html = (TEMPLATE.read_text(encoding="utf-8")
             .replace("__TARGETS__", json.dumps(targets).replace("</", "<\\/"))
             .replace("__JOBS__", json.dumps(_jobs(root)).replace("</", "<\\/"))
@@ -454,6 +507,16 @@ def _render_pane(pane: Path) -> str | None:
         page = engine.read_text(encoding="utf-8")
         return godot_preview.render_shell(godot_preview._extract_boot_config(page),
                                           godot_preview._extract_runtime_url(page))
+    ske = next((p for p in sorted(output.glob("*_ske.json"))
+                if detect.detect_format(p) == "dragonbones"), None)
+    if ske is not None:
+        atlas_file = next(iter(sorted(output.glob("*_tex.json"))), None)
+        pages = [p for p in sorted(output.iterdir())
+                 if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")]
+        return dragonbones_viewer_out.render_viewer(
+            f"output/{ske.name}",
+            f"output/{atlas_file.name}" if atlas_file else f"output/{ske.name}",
+            f"output/{pages[0].name}" if pages else "")
     rig = next((p for p in sorted(output.glob("*.json"))
                 if detect.detect_format(p) == "spine"), None)
     if rig is None:

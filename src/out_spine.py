@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .curves import clamp_first_key
 from .png import read_png_size
 from .model import (
     Skeleton, compose, godot_rest_worlds, godot_world_transforms,
@@ -242,36 +243,6 @@ def write_spine_json(model: Skeleton, output_path: str,
 
             bone_tracks = {}
 
-            def _clamp_first_last(keys: list) -> list:
-                """Reproduce Godot's AnimationPlayer edge behaviour: before the
-                first key the engine extrapolates the FIRST REAL SEGMENT
-                (key1 -> key2) backwards: value(t) = key1 + slope*(t1 - t),
-                slope = (key2 - key1)/(t2 - t1) — verified against the engine
-                (idle chest/head and fall legs land exactly on this line). The
-                Spine runtime instead holds nothing outside the keyed range
-                (flat setup pose), which diverges from Godot for any track
-                whose first key is not at t=0. Insert an extrapolated key at
-                t=0 so both runtimes sample the same ramp."""
-                if not keys:
-                    return keys
-                out = list(keys)
-                if out[0]["time"] > 0.0:
-                    k1, k2 = out[0], out[1] if len(out) > 1 else out[0]
-                    first = dict(k1)
-                    first["time"] = 0.0
-                    if k2 is not k1:
-                        t1, t2 = k1["time"], k2["time"]
-                        span = t2 - t1
-                        if span > 0:
-                            for field in ("value", "x", "y"):
-                                if field in k1 and field in k2:
-                                    slope = (k2[field] - k1[field]) / span
-                                    first[field] = round(
-                                        k1[field] + slope * (t1 - 0.0), 6)
-                    first.pop("curve", None)
-                    out.insert(0, first)
-                return out
-
             def curve_field(key, following, start_values, value_maps) -> dict:
                 """The segment's ``curve`` for the Spine runtime.
 
@@ -328,7 +299,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                         (entry["value"],),
                         (lambda v: setup_rotation - v,)))
                     entries.append(entry)
-                bone_tracks["rotate"] = _clamp_first_last(entries)
+                bone_tracks["rotate"] = clamp_first_key(entries, ('value', 'x', 'y'))
             if props.get("translate"):
                 setup_position = bone.position if bone else (0.0, 0.0)
                 translate_keys = props["translate"]
@@ -346,7 +317,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                         (lambda v: v - setup_position[0],
                          lambda v: setup_position[1] - v)))
                     entries.append(entry)
-                bone_tracks["translate"] = _clamp_first_last(entries)
+                bone_tracks["translate"] = clamp_first_key(entries, ('value', 'x', 'y'))
             if props.get("scale"):
                 # Absolute local scale, no axis mirroring: the Godot values
                 # ARE the spine values.
@@ -364,7 +335,7 @@ def write_spine_json(model: Skeleton, output_path: str,
                         (entry["x"], entry["y"]),
                         (lambda v: v, lambda v: v)))
                     entries.append(entry)
-                bone_tracks["scale"] = _clamp_first_last(entries)
+                bone_tracks["scale"] = clamp_first_key(entries, ('value', 'x', 'y'))
             if bone_tracks:
                 animation["bones"][bone_name] = bone_tracks
         slot_tracks = model.slot_timelines.get(anim_name) or {}

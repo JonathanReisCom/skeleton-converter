@@ -41,6 +41,25 @@ def _armature() -> dict:
     }
 
 
+def _dragonbones() -> dict:
+    """The keys the runtime's parser gates on: an `armature` list."""
+    return {
+        "frameRate": 24,
+        "name": "hero",
+        "version": "5.5",
+        "compatibleVersion": "5.5",
+        "armature": [{
+            "type": "Armature",
+            "frameRate": 24,
+            "name": "hero",
+            "bone": [{"name": "root"}],
+            "slot": [],
+            "skin": [{"name": "default", "slot": []}],
+            "animation": [],
+        }],
+    }
+
+
 def _skf_bytes() -> bytes:
     """A real bundle: ZIP magic, `armature.json` member, a page image."""
     import io
@@ -149,6 +168,27 @@ def test_detect_rig_picks_the_rig_out_of_an_upload(tmp_path):
     assert detect_rig([str(atlas), str(page), str(rig)]) == (str(rig), "spine")
 
 
+def test_dragonbones_json(tmp_path):
+    path = _write(tmp_path / "hero_ske.json", _dragonbones())
+    assert detect_format(path) == "dragonbones"
+
+
+def test_dragonbones_texture_atlas_is_not_a_rig(tmp_path):
+    """`_tex.json` is a companion: its SubTexture list is not an armature."""
+    atlas = _write(tmp_path / "hero_tex.json",
+                   {"name": "hero", "imagePath": "hero.png", "width": 64,
+                    "height": 64, "SubTexture": [{"name": "body", "x": 0, "y": 0,
+                                                  "width": 8, "height": 8}]})
+    assert detect_format(atlas) is None
+
+
+def test_a_skin_keyed_json_is_not_read_as_a_dragonbones_rig(tmp_path):
+    """DragonBones is decided by `armature`, not by the `bones`/`animations`
+    pair a Spine file and a DragonBones skin both carry."""
+    path = _write(tmp_path / "skinned.json", _spine())
+    assert detect_format(path) == "spine"
+
+
 def test_detect_rig_with_only_companions_is_none(tmp_path):
     atlas = _write(tmp_path / "hero.atlas", "hero.png\n")
     page = _write(tmp_path / "hero.png", b"\x89PNG\r\n\x1a\n")
@@ -163,7 +203,9 @@ def test_describe_recognized_and_unrecognized(tmp_path):
                   '[gd_resource type="AnimationLibrary" format=3]\n')
     notes = _write(tmp_path / "notes.txt", "notes\n")
 
+    dragonbones = _write(tmp_path / "hero_ske.json", _dragonbones())
     assert describe(rig) == "spine: hero.json"
+    assert describe(dragonbones) == "dragonbones: hero_ske.json"
     assert describe(bundle) == "skelform: rig.skf (3 entries)"
     assert describe(tres) == "tres: library.tres (no reader, writer only)"
     assert describe(notes) == "unrecognized: notes.txt"

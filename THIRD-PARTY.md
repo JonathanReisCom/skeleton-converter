@@ -22,6 +22,8 @@ a bundle needs network access. The converter itself never does.
 | `Retropaint/skelform-web-player@cd7451daea40eec177e6687a4c9a89d523d782ea` (`api.js`, the loader and draw loop) | jsDelivr, fetched by the SkelForm pane | **none declared** — see below |
 | `jszip.js` | jsDelivr, via the player | MIT (JSZip, Stuk) |
 | Godot Engine (web export) | the official binary, exported into each bundle | MIT |
+| `DragonBones/DragonBonesJS@64b6c69ae35777c2404be68c9192e2c56906079e` (`Pixi/5.x/out/dragonBones.js`) | jsDelivr, fetched by the DragonBones pane | MIT |
+| `pixi.js@5.3.12` | jsDelivr, fetched by the DragonBones pane | MIT |
 
 The Spine runtime is loaded from a CDN rather than vendored, so nothing is
 redistributed here, but the [Spine Runtimes
@@ -59,6 +61,14 @@ redistribution must include the license notice.
 The Spine name and logo are trademarks of Esoteric Software LLC. This tool is
 not affiliated with, endorsed by, or sponsored by Esoteric Software.
 
-## DragonBones format (planned)
+## DragonBones format
 
-DragonBones is open source. Runtime libraries are BSD-licensed.
+DragonBones is open source (MIT): the runtime this tool's pane loads is
+`DragonBonesJS`, the same code LoongBones ships, fetched from a CDN rather than
+vendored. Pixi 5 is its renderer, also MIT. The file format itself has no
+license — a written `_ske.json` is the user's own data.
+
+The 5.x host is pinned deliberately: the 8.x port does not refresh a weighted
+mesh's vertex buffer after the first pose, which renders a skinned rig frozen
+and scattered. Measured on the same bundle, 5.x tracks the model within 0.3
+units while 8.x never changes a vertex.

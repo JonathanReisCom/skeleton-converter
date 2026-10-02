@@ -36,6 +36,8 @@ def _kind(bundle: Path) -> str:
         return "spine"
     if any(path for d in dirs for path in d.glob("*.skf")):
         return "skelform"
+    if any(path for d in dirs for path in d.glob("*_ske.json")):
+        return "dragonbones"
     for d in dirs:
         for candidate in sorted(d.glob("*.json")):
             if detect.detect_format(candidate) == "spine":

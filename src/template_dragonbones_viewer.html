@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>skeleton-converter dragonbones viewer</title>
+<link rel="stylesheet" href="hud.css">
+<style>
+  :root { --bg: #0f0f0f; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  /* Pixi creates the canvas and sizes it (resizeTo + autoDensity); this only
+     keeps it from being an inline element with a text baseline. */
+  canvas { display: block; }
+  .rig-stats { font: 10px/1.4 var(--mono); color: var(--muted); margin-top: 5px; }
+</style>
+</head>
+<body>
+<!-- crossorigin: an error inside a cross-origin classic script is reported as
+     "Script error." without it, which hides exactly what a broken rig needs to
+     say. jsDelivr serves these with CORS. -->
+<script src="__CDN_PIXI__" crossorigin="anonymous"></script>
+<script src="__CDN_RUNTIME__" crossorigin="anonymous"></script>
+<script src="hud.js"></script>
+<script>
+// The rig is played by DragonBones' own runtime — DragonBonesJS' combined core
+// + Pixi 8 host bundle, the same file the official Pixi 8 demo loads — so this
+// pane shows the written _ske.json/_tex.json as the format's own parser,
+// animator and Pixi host read it, not a replay through another format.
+// Loading is async; the shell's readiness probe waits for previewPlay, which is
+// defined below and guards on the rig still being null.
+const SKE_URL = "__SKE_URL__";
+const TEX_URL = "__TEX_URL__";
+const PAGE_URL = "__PAGE_URL__";
+const TITLE = "__TITLE__";
+
+let app = null;          // PIXI.Application (Pixi 8: construct, then `await init`)
+let factory = null;      // dragonBones.PixiFactory.factory
+let display = null;      // dragonBones.PixiArmatureDisplay (a PIXI.Container)
+let armature = null;     // display.armature — the DragonBones Armature
+let state = null;        // the AnimationState currently held
+let animationName = "";  // which animation `state` is playing
+let animations = [];     // animation names, in file order
+let activeSkin = "";     // the skin the slots' display frames were built from
+let fitBox = null;       // [minX, minY, maxX, maxY] of the SETUP pose
+
+if (!window.hud) {
+  // A bundle written before the shared HUD existed: the two files sit beside
+  // this page, so the message is actionable instead of a blank pane.
+  document.body.insertAdjacentHTML("beforeend",
+    '<p style="position:fixed;left:8px;bottom:8px;color:#ff7b7b">'
+    + "hud.js is missing beside this viewer — rebuild the bundle.</p>");
+  window.__loadError = "hud.js missing";
+  throw new Error("hud.js missing");
+}
+const nodes = hud.mount({ title: "dragonbones 5.7" });
+const explorer = hud.explorer();
+hud.setNote(nodes, TITLE + " · t=0.0");
+hud.watchErrors(nodes);
+const stats = document.createElement("div");
+stats.className = "rig-stats";
+nodes.box.appendChild(stats);
+
+// ---------------------------------------------------------------------------
+// The integration contract the compare shell drives this pane through
+// (previewPlay / previewFreeze / __attachmentRows / __drawnBySlot /
+// __skinRows / __loadError / __animations). Every entry point guards on the
+// rig being loaded: the shell's readiness probe resolves as soon as
+// previewPlay exists, which is before the fetches finish.
+
+// One animation at a time, and only a real name. `play(name, 0)`:
+// DragonBonesJS Animation.play(animationName, playTimes) documents
+// `0: No end loop playing` and `-1: Use the default value of animation data`
+// (Animation.ts, `play`), and the official demo calls `play("idle", 0)`.
+function select(name) {
+  if (!armature) return;
+  const wanted = animations.indexOf(name) >= 0 ? name : (animations[0] || "");
+  if (!wanted) return;
+  if (wanted === animationName && state) return;
+  animationName = wanted;
+  state = armature.animation.play(wanted, 0);
+}
+
+window.previewPlay = function (name) {
+  if (!armature) return;
+  select(name);
+  if (!state) return;
+  // Driven, not clocked: the ticker would keep advancing `_time` between two
+  // seeks, and a compared pane must show the shell's master time exactly.
+  // Animation.timeScale multiplies the passed time before it reaches the
+  // states (Animation.ts `advanceTime`: `passedTime *= this._inheritTimeScale`),
+  // so 0 stops the automatic advance without stopping the state.
+  armature.animation.timeScale = 0;
+  state.currentTime = 0;
+  armature.invalidUpdate();
+  applySeek();
+  // Mark the animation that is actually held: an unknown name falls back to
+  // the first one, and the button that lights up must be that one.
+  hud.mark(nodes, animationName);
+  // Standalone (a bundle's own index.html) the pane owns its clock, exactly as
+  // the SkelForm pane does; embedded, the shell's clock is the only clock.
+  if (window.self === window.top) startPump(animationName);
+};
+
+window.previewFreeze = function (name, t) {
+  if (!armature) return;
+  select(name);
+  if (!state) return;
+  armature.animation.timeScale = 0;
+  // Seconds. The setter wraps by the animation's own duration itself
+  // (AnimationState.currentTime: `value = (value % this._duration) + ...`), so
+  // a master clock that runs for minutes needs no wrap here.
+  state.currentTime = t;
+  // currentTime only marks the pose stale — it sets `playState = -1` on every
+  // bone/slot timeline and calls `_actionTimeline.setCurrentTime`
+  // (AnimationState.currentTime). One zero-length advanceTime is what applies
+  // the seeked pose to the bones and the Pixi display objects.
+  //
+  // `invalidUpdate()` first: the armature only walks its bones when the cache
+  // frame index moved, and a slot only rebuilds a skinned mesh when one of the
+  // bones it follows is dirty (`Slot.update` -> `_isBonesUpdate`). Without it a
+  // seek that lands on the frame the rig is already showing leaves every mesh
+  // vertex at the pose the buffer was first built with — a frozen, scattered
+  // rig on the very first freeze after load.
+  armature.invalidUpdate();
+  applySeek();
+  // Mark the animation that is actually held: an unknown name falls back to
+  // the first one, and the button that lights up must be that one.
+  hud.mark(nodes, animationName);
+};
+
+// Apply the seeked pose. `timeScale` multiplies the passed time before it
+// reaches the states, so a zero-length advance does nothing while the pane is
+// frozen — and the armature only walks its bones when the cache frame index
+// moved. A tenth of a millisecond with the scale temporarily open forces the
+// whole chain (bones -> slots -> skinned meshes) to rebuild; the pose it lands
+// on is the seeked one to within a ten-thousandth of a second. The scale is
+// restored in the same synchronous block, so the ticker never sees it open.
+function applySeek() {
+  const scale = armature.animation.timeScale;
+  armature.animation.timeScale = 1;
+  armature.advanceTime(0.0001);
+  armature.animation.timeScale = scale;
+}
+
+// Opened standalone the pane integrates its own clock and seeks through the
+// same previewFreeze the shell calls, so play, freeze and speed read one code
+// path. The runtime's ticker has no scale to set here — timeScale is the
+// pane's, and it stays 0 while driven.
+let speedValue = 1;
+let playName = null, playT = 0, playLast = 0, playRAF = 0;
+function pump(now) {
+  playRAF = 0;
+  if (!armature || playName === null) return;
+  // Speed changes mid-flight are applied to the interval, never to playT, so
+  // stepping 1x -> 2x does not jump the rig forward by what it already played.
+  playT += (now - playLast) / 1000 * speedValue;
+  playLast = now;
+  window.previewFreeze(playName, playT);
+  playRAF = requestAnimationFrame(pump);
+}
+function startPump(name) {
+  playName = name;
+  playT = 0;
+  playLast = performance.now();
+  if (!playRAF) playRAF = requestAnimationFrame(pump);
+}
+hud.speed(nodes, (value) => { speedValue = value; }, 1);
+
+// ---------------------------------------------------------------------------
+// What the rig holds, read from the runtime (only it knows).
+
+// The skin the slots' display frames were built from: the armature's own
+// `defaultSkin` until `__skinRows` picks another. ArmatureData holds the skins
+// in a plain object (`skins`, ArmatureData.ts) — there is no `skinNames` in
+// this runtime — and `getSkin(name)` is its lookup.
+function activeSkinData() {
+  const data = armature ? armature.armatureData : null;
+  if (!data) return null;
+  return data.getSkin(activeSkin) || data.defaultSkin;
+}
+
+// The names a slot can draw, in frame order. Read from the SKIN rather than
+// from the slot: a slot's display frames are built from the skin's display
+// list (`BaseFactory.replaceSkin` walks `skin.getDisplays(slot.name)` and
+// assigns them by index; `Armature` builds the initial frames from
+// `defaultSkin` the same way), so index N of the frame list IS index N of
+// this list.
+function displayNames(slot) {
+  const skin = activeSkinData();
+  const list = skin ? skin.getDisplays(slot.name) : null;
+  const names = [];
+  (list || []).forEach((data) => { if (data && data.name) names.push(data.name); });
+  return names;
+}
+
+// Attachment explorer rows, one per slot that has something to draw.
+function attachmentRows() {
+  const rows = [];
+  if (!armature) return rows;
+  armature.getSlots().forEach((slot) => {
+    const names = displayNames(slot);
+    if (!names.length) return;
+    const index = slot.displayIndex;
+    rows.push({
+      name: slot.name,
+      options: names,
+      value: (index >= 0 && index < names.length) ? names[index] : "",
+      // `slot.displayIndex = i` is the runtime's own switch (Slot.ts:
+      // `set displayIndex(value) { this._setDisplayIndex(value); this.update(-1); }`)
+      // and the official ReplaceSlotDisplay demo uses exactly it. An animation
+      // timeline that also keys this slot re-applies its OWN index only when
+      // that index changes (`SlotTimelineState`: `if (slot.displayIndex !==
+      // displayIndex) slot._setDisplayIndex(displayIndex, true)`, and
+      // `_setDisplayIndex` returns early when the animation index is
+      // unchanged), so a pick on a statically-keyed slot sticks. -1 is the
+      // runtime's "draw nothing".
+      onPick: (value) => {
+        const wanted = names.indexOf(value);
+        slot.displayIndex = wanted >= 0 ? wanted : -1;
+      },
+    });
+  });
+  return rows;
+}
+
+// What the runtime is DRAWING right now, slot by slot — the empty string when
+// the slot draws nothing. `_renderDisplay` is PixiSlot's live PIXI object: it
+// is what `_updateFrame` hides (`normalDisplay.visible = false`) when a slot
+// has no display or no texture, while the base class's `slot.display` stays
+// null for a slot that never had a display replaced.
+function drawnBySlot() {
+  const out = {};
+  if (!armature) return out;
+  armature.getSlots().forEach((slot) => {
+    const names = displayNames(slot);
+    const node = slot._renderDisplay;
+    const index = slot.displayIndex;
+    out[slot.name] = (node && node.visible !== false && index >= 0)
+      ? (names[index] || "") : "";
+  });
+  return out;
+}
+
+// Skin picker. DragonBones' switching call is `factory.replaceSkin(armature,
+// skin, isOverride, exclude)` — the official ReplaceSkin demo's call — and the
+// skin data comes from `armatureData.getSkin(name)`.
+function skinRows() {
+  if (!armature) return [];
+  const data = armature.armatureData;
+  const names = Object.keys(data.skins || {});
+  // One skin is not a choice, and every official rig ships exactly one, named
+  // "" (the parser defaults a missing name to ""). A row whose only option is
+  // "" renders as a blank select in the shell, so the row appears only when
+  // there is something to switch to — the same rule the Spine pane applies.
+  if (names.length < 2) return [];
+  return [{
+    name: "skin",
+    options: names,
+    value: activeSkin || (data.defaultSkin ? data.defaultSkin.name : ""),
+    onPick: (value) => {
+      const skin = data.getSkin(value);
+      if (!skin) return;
+      factory.replaceSkin(armature, skin);
+      activeSkin = value;
+      // The swap marks the slots dirty; one zero-length advance puts the new
+      // frames on screen without waiting for the next tick.
+      armature.advanceTime(0);
+      refreshRows();
+    },
+  }];
+}
+
+// Rebuild the pane's own explorer and tell the shell its rows changed: the
+// rows are built once at load, and a skin switch changes which displays a slot
+// has.
+function refreshRows() {
+  hud.explorerRows(explorer, attachmentRows());
+  try { window.top.__attachmentsChanged && window.top.__attachmentsChanged(); }
+  catch (error) { /* standalone: the panel above is the only explorer */ }
+}
+
+// ---------------------------------------------------------------------------
+// Boot: Pixi 8 application, then the three files this converter writes.
+
+// The setup pose's box, measured once — the same thing the Spine pane frames
+// (`skeleton.getBounds` before its AnimationState applies). Measuring whatever
+// frame happened to be on screen framed a moving target: the pose that loads
+// first would set the camera and every other pose then runs off the canvas.
+// Bounds come from the slot display objects the runtime itself positioned, so
+// nothing is recomputed from the file here.
+function measureBox() {
+  display.scale.set(1);
+  display.position.set(0, 0);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  armature.getSlots().forEach((slot) => {
+    const node = slot._renderDisplay;
+    if (!node || node.visible === false) return;
+    const box = node.getBounds();
+    if (!isFinite(box.x) || !isFinite(box.y) || box.width <= 0 || box.height <= 0) return;
+    minX = Math.min(minX, box.x);
+    minY = Math.min(minY, box.y);
+    maxX = Math.max(maxX, box.x + box.width);
+    maxY = Math.max(maxY, box.y + box.height);
+  });
+  return minX === Infinity ? null : [minX, minY, maxX, maxY];
+}
+
+// Frame the rig with the shared margin (`hud.fitScale`), so this pane and the
+// Spine one frame the same box at the same size. DragonBones is y-down
+// (`DragonBones.yDown = true` in this bundle) and so is Pixi, so the file's
+// coordinates map straight into Pixi's space: no mirror, no sign flip.
+function fit() {
+  if (!display || !armature || !app) return;
+  const width = Math.max(app.renderer.width, 1), height = Math.max(app.renderer.height, 1);
+  if (!fitBox) fitBox = measureBox();
+  if (!fitBox) return;
+  const [minX, minY, maxX, maxY] = fitBox;
+  const scale = hud.fitScale(maxX - minX, maxY - minY, width, height);
+  display.scale.set(scale);
+  display.position.set(width / 2 - (minX + maxX) / 2 * scale,
+                       height / 2 - (minY + maxY) / 2 * scale);
+  // What the camera was fitted to, readable from the DOM: the pane's own
+  // instrumentation, since a canvas gives a probe nothing to assert against.
+  document.body.dataset.fit = JSON.stringify({
+    canvas: [width, height], scale,
+    position: [display.position.x, display.position.y],
+    world: fitBox,
+  });
+}
+
+function frame() {
+  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+async function start() {
+  try {
+    // Pixi 5's Application is constructed synchronously; the pane pins the
+    // 5.x line deliberately (see `dragonbones_viewer_out`).
+    app = new PIXI.Application({ width: window.innerWidth, height: window.innerHeight,
+                                backgroundColor: 0x0f0f0f, antialias: true, autoDensity: true });
+    document.body.appendChild(app.view);
+    window.addEventListener("resize", () => {
+      app.renderer.resize(window.innerWidth, window.innerHeight);
+      fitBox = null;
+      fit();
+    });
+
+    const skeJson = await (await fetch(SKE_URL)).json();
+    const texJson = await (await fetch(TEX_URL)).json();
+    // The atlas is handed to the runtime as a parsed OBJECT plus the texture
+    // loaded from the page URL, so the pane never depends on the `imagePath`
+    // inside the _tex.json resolving on disk (PixiFactory._buildTextureAtlasData
+    // takes the texture as its second argument).
+    const page = PIXI.Texture.from(PAGE_URL);
+
+    factory = dragonBones.PixiFactory.factory;
+    factory.parseDragonBonesData(skeJson);
+    factory.parseTextureAtlasData(texJson, page.baseTexture);
+
+    const armatureName = skeJson.armature[0].name;
+    display = factory.buildArmatureDisplay(armatureName);
+    if (!display) throw new Error("no armature named " + armatureName);
+    armature = display.armature;
+    app.stage.addChild(display);
+
+    animations = armature.animation.animationNames.slice();
+    activeSkin = armature.armatureData.defaultSkin
+      ? armature.armatureData.defaultSkin.name : "";
+    window.__animations = animations;
+    window.__attachmentRows = attachmentRows;
+    window.__drawnBySlot = drawnBySlot;
+    window.__skinRows = skinRows;
+    // Debug handles: the verification rule in AGENTS.md samples a running page
+    // to prove the rig animates. Keep the names stable.
+    window.__armature = armature;
+    window.__display = display;
+    window.__factory = factory;
+
+    hud.tracks(nodes, animations, (name) => { window.previewPlay(name); }, animations[0]);
+    hud.explorerRows(explorer, attachmentRows());
+    // Tell the shell the rows exist NOW: they are built here, after the three
+    // files arrived, while `previewPlay` (the shell's readiness test) is defined
+    // before any fetch. The shell reads every pane's rows once, as soon as all
+    // panes report ready, so without this its fan-out ran before this pane had
+    // any and silently kept it out.
+    try { window.top.__attachmentsChanged && window.top.__attachmentsChanged(); }
+    catch (error) { /* standalone: the panel above is the only explorer */ }
+
+    // Two frames before measuring: the shared ticker advances the armature (and
+    // its Pixi proxy's `dbUpdate`) on its own rAF, and the display objects only
+    // have their setup transforms after that ran. Nothing has been played yet,
+    // so the box is the setup pose.
+    //
+    // Measured twice, one frame apart, and unioned: in an embedded pane the
+    // ticker can still be a frame behind when the first measurement runs, and a
+    // box taken from half-positioned slots framed the rig ~10% larger than the
+    // Spine pane does. The union of the two is the setup box either way.
+    await frame();
+    fit();
+    await frame();
+    fitBox = null;
+    fit();
+    window.addEventListener("resize", fit);
+
+    if (animations.length) {
+      // Starts the pane's own clock when it is opened standalone; embedded,
+      // previewPlay deliberately leaves the clock to the shell's master one.
+      window.previewPlay(animations[0]);
+    }
+
+    setInterval(() => {
+      if (!armature) return;
+      hud.setNote(nodes, TITLE + " · t=" + (state ? state.currentTime : 0).toFixed(1));
+      // What actually loaded: a bundle whose atlas or page never arrived draws
+      // nothing and says nothing. Guarded — a diagnostic must never be the
+      // thing that breaks the pane.
+      try {
+        const slots = armature.getSlots();
+        const drawn = slots.filter((slot) => {
+          const node = slot._renderDisplay;
+          return node && node.visible !== false && slot.displayIndex >= 0;
+        }).map((slot) => slot.name);
+        stats.textContent = armature.getBones().length + " bones · " + slots.length
+          + " slots · " + animations.length + " animations · "
+          + Object.keys(armature.armatureData.skins || {}).length + " skins"
+          + " · drawing " + drawn.slice(0, 6).join(",")
+          + (drawn.length > 6 ? "+" + (drawn.length - 6) : "");
+      } catch (error) {
+        stats.textContent = "stats failed: " + error.message;
+      }
+    }, 300);
+
+    document.body.dataset.ready = "1";
+  } catch (error) {
+    const message = "cannot play " + SKE_URL + ": "
+      + (error && error.message ? error.message : error);
+    window.__loadError = message;
+    hud.fail(nodes, message);
+  }
+}
+
+// A probe that runs in another JavaScript world (an automation harness's
+// `page.evaluate`) can read the DOM but cannot see this page's globals, so the
+// pose it needs has to be handed over as DOM text. Dispatch a `dragonbones-pose`
+// CustomEvent with `{name, time}` on the document and the sampled pose lands in
+// `document.body.dataset.pose` — the same instrumentation idea as `dataset.fit`
+// above, and the only way to compare a canvas against the model numerically.
+document.addEventListener("dragonbones-pose", (event) => {
+  const detail = event.detail || {};
+  try {
+    previewFreeze(detail.name, detail.time);
+    const bones = {};
+    for (const bone of armature.getBones()) {
+      const matrix = bone.globalTransformMatrix;
+      bones[bone.name] = [matrix.a, matrix.b, matrix.c, matrix.d,
+                          matrix.tx, matrix.ty];
+    }
+    // Mesh vertices as the runtime computed them: a skinned mesh is placed by
+    // the bones, so its positions are the only proof the bind matrices read
+    // back the way the writer wrote them.
+    const meshes = {};
+    for (const slot of armature.getSlots()) {
+      const node = slot._renderDisplay;
+      // Pixi 5 keeps the vertex buffer on the mesh itself; the check is the
+      // buffer's presence, not a Pixi-8-only `geometry.uvs`.
+      if (node && node.vertices && node.vertices.length) {
+        meshes[slot.name] = Array.from(node.vertices);
+      }
+    }
+    document.body.dataset.pose = JSON.stringify({
+      name: detail.name, time: detail.time, bones, meshes,
+    });
+  } catch (error) {
+    document.body.dataset.pose = JSON.stringify({
+      error: error && error.message ? error.message : String(error),
+    });
+  }
+});
+
+start();
+</script>
+</body>
+</html>

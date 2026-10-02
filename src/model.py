@@ -243,12 +243,22 @@ class Skeleton:
     attachments: list = field(default_factory=list)  # list[Attachment]
     # name -> {bone_name: {"rotate": list[Key] | "translate": list[Key]}}
     animations: dict = field(default_factory=dict)
+    # Animation name -> the source's own duration in seconds, when the format
+    # declares one. A frame-based format loops for its declared length, which
+    # its LAST frame's `duration` carries as a trailing hold; a target that
+    # infers the length from the last key would cut that hold off the loop.
+    animation_durations: dict = field(default_factory=dict)
     # Attachment timelines: {animation: {slot: [{"time": float,
     # "attachment": name or None}]}}. A slot's drawn attachment changes over
     # time; None hides the slot. Kept beside the bone tracks because a slot is
     # not a bone and the two have independent key times.
     slot_timelines: dict = field(default_factory=dict)
     texture_path: str = ""                           # res:// path from the source scene
+    # The source file's own frame rate, when the format has one (DragonBones
+    # declares it, SkelForm stores it per animation). A target that keys on
+    # integer frames starts from this rate instead of the format's default, so
+    # a same-format round trip keeps the grid it was authored on.
+    frame_rate: float | None = None
     by_name: dict = field(default_factory=dict)      # bone name → Bone, populated by readers
     # Facts the reader learned that the caller should report rather than
     # rediscover: which atlas was used, which constraints were baked, what the

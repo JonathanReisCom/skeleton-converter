@@ -55,6 +55,11 @@ def _sniff_json(source: Path) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
+    # DragonBones (and LoongBones, its successor) names its rigs `armature`;
+    # the check has to run before the generic `bones`/`animations` pair below,
+    # which a DragonBones skin also carries.
+    if "armature" in data:
+        return "dragonbones"
     # SkelForm only: `visuals` / `styles` / `img_format` are its vocabulary.
     if "visuals" in data or "img_format" in data or "styles" in data:
         return "skelform"

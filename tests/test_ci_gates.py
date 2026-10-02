@@ -28,6 +28,7 @@ from pathlib import Path
 
 from src import bundle
 from src.in_godot import read_godot_skeleton
+from src.in_dragonbones import read_skeleton as read_dragonbones
 from src.in_skelform import read_skeleton as read_skelform
 from src.in_spine import read_skeleton
 from tests.ci_rig import PAGE_SIZE
@@ -359,6 +360,102 @@ def test_skelform_target_carries_the_rig_and_its_page(tmp_path):
     bundle.convert(str(tmp_path / f"{STEM}.tscn"), "godot", "godot",
                    str(godot_out), name=STEM)
     assert (godot_out / "output" / PAGE).is_file()
+
+
+def test_dragonbones_target_carries_the_rig_and_its_page(tmp_path):
+    """The DragonBones leg writes a bundle its own runtime can play.
+
+    Beyond the numeric round trip, this asserts what makes the bundle loadable:
+    the data, the texture atlas and the page, with the atlas naming a region
+    for every display (the runtime looks a display's texture up by `path`, and
+    a mesh without one draws nothing). The shell has to link the format's own
+    runtime, pinned by commit, because the pane's job is to show the file this
+    leg wrote, read by the format's own code.
+    """
+    source = _spine_model(tmp_path)
+    out = tmp_path / "db-bundle"
+    bundle.convert(str(tmp_path / f"{STEM}.json"), "spine", "dragonbones",
+                   str(out), name=STEM)
+    data = out / "output" / f"{STEM}_ske.json"
+    atlas = out / "output" / f"{STEM}_tex.json"
+    page = out / "output" / PAGE
+    assert data.is_file() and atlas.is_file() and page.is_file()
+
+    document = json.loads(data.read_text(encoding="utf-8"))
+    assert document["version"] == "5.5"
+    assert document["armature"][0]["name"] == STEM
+    armature = document["armature"][0]
+    assert [bone["name"] for bone in armature["bone"]] \
+        == [bone.name for bone in source.bones]
+    assert len(armature["slot"]) == len({(a.slot or a.name)
+                                         for a in source.attachments})
+    # Every slot names the bone it hangs from, and a slot with no setup
+    # attachment must say so: the parser's default is 0, which would draw the
+    # first entry of a slot the source leaves empty.
+    bone_names = {bone["name"] for bone in armature["bone"]}
+    for slot in armature["slot"]:
+        assert slot["parent"] in bone_names, slot
+        assert slot["displayIndex"] >= -1, slot
+
+    textures = {entry["name"]: entry
+                for entry in json.loads(atlas.read_text(encoding="utf-8"))["SubTexture"]}
+    for slot in armature["skin"][0]["slot"]:
+        for display in slot["display"]:
+            if not display:
+                continue
+            assert display["path"] in textures, display
+            region = textures[display["path"]]
+            assert region["width"] > 0 and region["height"] > 0, region
+            if display["type"] == "image":
+                # A sprite is drawn from the region rect: it must state its
+                # pivot, because the parser's default is the centre (0.5, 0.5)
+                # while the writer anchors the top-left corner.
+                assert display["pivot"] == {"x": 0.0, "y": 0.0}, display
+                assert display["transform"]["skY"] == display["transform"]["skX"], \
+                    display
+            else:
+                assert display["type"] == "mesh", display
+                # A weighted mesh is placed by the bind, so both matrices and
+                # one weight list per vertex have to be there.
+                assert len(display["slotPose"]) == 6, display
+                assert len(display["bonePose"]) % 7 == 0, display
+                # One `[count, (bone, weight)…]` group per vertex, in the
+                # order the vertices come in (the parser walks it that way).
+                weights, cursor, vertices = display["weights"], 0, 0
+                while cursor < len(weights):
+                    count = int(weights[cursor])
+                    assert count >= 1, display
+                    for _ in range(count):
+                        assert 0 <= weights[cursor + 1] < len(armature["bone"]), display
+                        assert weights[cursor + 2] > 0, display
+                        cursor += 2
+                    cursor += 1
+                    vertices += 1
+                assert vertices == len(display["vertices"]) // 2, display
+
+    shell = (out / "index.html").read_text(encoding="utf-8")
+    assert f"output/{STEM}_ske.json" in shell
+    assert f"output/{STEM}_tex.json" in shell
+    assert "DragonBonesJS@" in shell and "pixi.js@" in shell
+
+    reloaded = read_dragonbones(str(data))
+    assert _worst_bone(source, reloaded) < TOLERANCE
+    _assert_same_geometry(source, reloaded)
+    _assert_same_animations(source, reloaded)
+    width, height = PAGE_SIZE
+    for attachment in reloaded.attachments:
+        for u, v in attachment.uv:
+            assert 0.0 <= u <= width and 0.0 <= v <= height, \
+                (attachment.name, u, v, PAGE_SIZE)
+
+    # Godot source: the page lives beside the scene, and the bundle has to
+    # carry a copy of it — a data file that merely names a page is unplayable.
+    _godot_model(tmp_path)
+    scene_out = tmp_path / "db-scene-bundle"
+    bundle.convert(str(tmp_path / f"{STEM}.tscn"), "godot", "dragonbones",
+                   str(scene_out), name=STEM)
+    assert (scene_out / "output" / f"{STEM}_ske.json").is_file()
+    assert (scene_out / "output" / PAGE).is_file()
 
 
 def test_spine_to_godot_roundtrip_agrees_numerically(tmp_path):

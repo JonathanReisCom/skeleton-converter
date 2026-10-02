@@ -248,7 +248,8 @@ def test_every_browser_viewer_links_the_shared_hud():
     """The chrome is one file now: a template that inlines its own HUD again
     would drift from the others, which is what the pane look is compared on."""
     for name in ("template_spine_viewer.html", "template_skelform_viewer.html",
-                 "template_godot_viewer.html"):
+                 "template_godot_viewer.html",
+                 "template_dragonbones_viewer.html"):
         text = (Path("src") / name).read_text(encoding="utf-8")
         assert 'href="hud.css"' in text, name
         assert 'src="hud.js"' in text, name

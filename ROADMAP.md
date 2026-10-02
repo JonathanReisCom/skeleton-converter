@@ -353,13 +353,34 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
 
 ### DragonBones
 
-- [ ] Importer (`.json` v3/v4 → canonical model)
-- [ ] Exporter (canonical model → `.json`)
+- [x] Importer (`_ske.json` + `_tex.json` → canonical model) — DONE:
+      `src/in_dragonbones.py`. The runtime's `ObjectDataParser` is the contract:
+      `skX`/`skY` are the absolute skew/rotation columns (`skew = skX - skY`), a
+      timeline value is an OFFSET from the bone's setup (`origin + offset +
+      animationPose`, scales multiply), and a weighted mesh is `slotPose` (mesh
+      → armature) plus `bonePose` (per bone: file index + bind world) plus
+      `[count, (boneIndex, weight)…]` per vertex. A missing `tweenEasing` is
+      `-2` (held), never linear.
+- [x] Exporter (canonical model → `_ske.json` + `_tex.json`) — DONE:
+      `src/out_dragonbones.py`. Rigid rectangles are written as IMAGE displays
+      (pivot stated as the top-left, because the parser's default is the
+      centre), everything else as weighted meshes. Frames are integer
+      durations, so the frame rate is picked to fit the rig's key times and the
+      cost is reported.
+- [x] Web pane — the written bundle played by the format's own runtime,
+      pinned by commit. **Pixi 5, not 8**: the 8.x port leaves a weighted
+      mesh's vertex buffer at the pose it was first built with, so the rig
+      renders frozen and scattered; 5.x tracks the model within 0.3 units.
+- [ ] `boundingBox`, `path` constraints, `zOrder` timelines, slot colour and
+      events are read as notes and skipped (the canonical model has no channel
+      for them)
 
 ### LoongBones
 
-- [ ] Importer — uses the DragonBones format, so this may be an alias rather
-      than a new adapter (verify format version differences first)
+- [x] Importer — DONE, and it IS the same format: LoongBones is DragonBonesJS
+      rebranded (the runtime's own console banner names loongbones.app from
+      commit 64b6c69), so the DragonBones adapters read and write what the
+      LoongBones editor imports ("Import DragonBones Data Files").
 
 ### Distribution
 

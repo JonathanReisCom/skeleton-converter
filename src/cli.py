@@ -70,8 +70,8 @@ def main() -> int:
                                 help="texture path the Godot scene references")
     convert_parser.add_argument("--fps", type=float, default=None,
                                 help="frame rate for a frame-based target "
-                                     "(SkelForm); default picks one that fits "
-                                     "the rig's key times")
+                                     "(SkelForm, DragonBones); default picks one "
+                                     "that fits the rig's key times")
     convert_parser.add_argument("--skin", default=None,
                                 help="Spine skin to convert under (the rig's "
                                      "variant: a weapon skin carries the bones "

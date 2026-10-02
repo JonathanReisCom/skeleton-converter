@@ -64,3 +64,37 @@ def bezier_table(curve: list, axis: int, step: int, time1: float,
         return time_point
     value_point = bezier_table_point(curve, axis, step, time1, time2, value1, value2)
     return (time_point[0], value_point[1])
+
+
+def clamp_first_key(entries: list, fields: tuple) -> list:
+    """Insert an extrapolated key at t=0 when a track starts late.
+
+    Godot's AnimationPlayer extrapolates the FIRST REAL SEGMENT (key1 -> key2)
+    backwards: value(t) = key1 + slope*(t1 - t). Both the Spine and the
+    DragonBones runtimes instead hold the first frame's value, so any track
+    whose first key is not at t=0 diverges from the engine — and a comparison
+    frozen at t=0 then shows two different poses. Writing the extrapolated key
+    makes every runtime sample the same ramp.
+
+    ``entries`` are JSON frame dicts carrying ``time`` plus the named value
+    ``fields``; a field missing from either key is left alone.
+    """
+    if not entries:
+        return entries
+    out = list(entries)
+    if out[0]["time"] > 0.0:
+        first = dict(out[0])
+        second = out[1] if len(out) > 1 else out[0]
+        first["time"] = 0.0
+        if second is not out[0]:
+            time1, time2 = out[0]["time"], second["time"]
+            span = time2 - time1
+            if span > 0:
+                for field in fields:
+                    if field in out[0] and field in second:
+                        slope = (second[field] - out[0][field]) / span
+                        first[field] = round(
+                            out[0][field] + slope * (time1 - 0.0), 6)
+        first.pop("curve", None)
+        out.insert(0, first)
+    return out

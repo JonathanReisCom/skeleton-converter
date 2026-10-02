@@ -136,7 +136,8 @@ def test_upload_converts_into_every_other_format(studio_server, tmp_path):
     assert sorted(p.name for p in (job / data["source"] / "output").iterdir()) \
         == sorted([f"{STEM}.json", f"{STEM}.atlas", PAGE])
     # One pane per OTHER format, and never a copy of the source's own.
-    assert {entry["target"] for entry in data["targets"]} == {"godot", "skelform"}
+    assert {entry["target"] for entry in data["targets"]} \
+        == {"godot", "skelform", "dragonbones"}
     # Source first, then the converted outputs, in the order the shell lists.
     assert data["panes"][0] == data["source"]
     assert len(data["panes"]) == 1 + len(data["targets"])
@@ -269,9 +270,10 @@ def test_a_posted_target_no_longer_changes_anything(studio_server, tmp_path):
     write_spine_export(source)
 
     status, data = _post(url, {"files": _upload(source, f"{STEM}.json"),
-                               "target": "dragonbones"})
+                               "target": "spine"})
     assert status == 200, data
-    assert {entry["target"] for entry in data["targets"]} == {"godot", "skelform"}
+    assert {entry["target"] for entry in data["targets"]} \
+        == {"godot", "skelform", "dragonbones"}
 
 
 def test_a_refresh_serves_the_current_viewer_not_the_stored_copy(studio_server,

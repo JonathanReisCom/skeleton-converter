@@ -26,6 +26,7 @@
     --accent: #f00; --accent-soft: rgba(255, 0, 0, .14);
     --stage: #0f0f0f;
     --godot: #478cbf; --spine: #f4801f; --skelform: #8f7ee7;
+  --dragonbones: #d8b23a;
     --ui: "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
     --brand: "Roboto Condensed", "Roboto", system-ui, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
@@ -104,10 +105,12 @@
   .pane[data-kind="godot"] .tag i { background: var(--godot); }
   .pane[data-kind="spine"] .tag i { background: var(--spine); }
   .pane[data-kind="skelform"] .tag i { background: var(--skelform); }
+.pane[data-kind="dragonbones"] .tag i { background: var(--dragonbones); }
   .pane .tag u { text-decoration: none; color: var(--muted); font-weight: 400; }
   .pane[data-kind="godot"] .tag span::after { content: " · Godot 4.7"; }
   .pane[data-kind="spine"] .tag span::after { content: " · Spine 4.2"; }
   .pane[data-kind="skelform"] .tag span::after { content: " · SkelForm web"; }
+.pane[data-kind="dragonbones"] .tag span::after { content: " · DragonBones 5.7"; }
   .pane[data-failed="1"] .tag span::after { content: " · not loaded"; color: #ff8a8a; }
   .pane iframe { position: absolute; inset: 0; width: 100%; height: 100%;
                  border: 0; background: transparent; }
@@ -653,7 +656,7 @@ function seekAll(name, t) {
     if (!paneAlive(i)) return;  // a pane with no handles cannot be seeked
     // Godot and SkelForm panes both take (animation, seconds) directly; the
     // Spine pane is driven through its own AnimationState.
-    if (f.kind === "godot" || f.kind === "skelform") paneReady[i].previewFreeze(name, t);
+    if (f.kind === "godot" || f.kind === "skelform" || f.kind === "dragonbones") paneReady[i].previewFreeze(name, t);
     else freezeSpineAt(name, t, paneReady[i].__state, paneReady[i].__skeleton);
   });
 }

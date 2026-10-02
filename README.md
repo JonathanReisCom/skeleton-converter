@@ -2,16 +2,17 @@
 
 A conversion hub for 2D skeletal animation rigs. One canonical in-memory model,
 one importer and one exporter per format — currently Godot Skeleton2D scenes
-(.tscn) and Spine JSON, with more formats planned. Every conversion is proven
-numerically instead of trusted by eye.
+(.tscn), Spine JSON and DragonBones JSON (which is what LoongBones reads and
+writes). Every conversion is proven numerically instead of trusted by eye.
 
 ## Status
 
 Working today: Godot Skeleton2D scenes (.tscn) ⇄ Spine JSON in both
-directions, anything → SkelForm (`.skf`), everything proven by numeric
-round-trip validation — plus a browser studio that converts an upload into
-every other format and plays the results side by side. Next: DragonBones and
-LoongBones adapters via the same canonical model — see [ROADMAP.md](ROADMAP.md).
+directions, DragonBones JSON (`_ske.json` + `_tex.json`) in both directions,
+anything → SkelForm (`.skf`), everything proven by numeric round-trip
+validation — plus a browser studio that converts an upload into every other
+format and plays the results side by side. Remaining gaps are listed in
+[ROADMAP.md](ROADMAP.md).
 
 ## Why
 
@@ -41,6 +42,11 @@ python3 -m src.cli convert --to godot \
 # Anything -> SkelForm bundle: out/animation.skf (armature + its pages)
 python3 -m src.cli convert --to skelform \
   path/to/hero.json -o out --name animation
+
+# Spine JSON -> DragonBones bundle: out/animation_ske.json + _tex.json + page
+# (the three files LoongBones imports as "DragonBones Data Files")
+python3 -m src.cli convert --to dragonbones \
+  path/to/hero.json -o out --name animation
 ```
 
 `-o` is a **directory** (created if missing) and `--name` is the output stem;
@@ -52,8 +58,9 @@ omit `--name` and it defaults to the input file's name (`player.tscn` →
 the files must stay together and keep those names. Pass `--texture` to keep a
 specific `res://` path instead of the copied image.
 
-A `.tscn` is a Godot scene: there is no browser preview for it. Only `--to
-spine` writes a servable `index.html` — see [Viewer](#viewer).
+A `.tscn` is a Godot scene: there is no browser preview for it. `--to spine`,
+`--to skelform` and `--to dragonbones` each write a servable `index.html` — see
+[Viewer](#viewer).
 
 ## Studio
 
@@ -81,8 +88,9 @@ browser page cannot, it only sees the files it was given.
 The panes are the point: the **first** pane plays the file you brought (the
 Spine rig with its own atlas, the SkelForm archive, or the Godot scene packed
 unmodified for the browser engine), and every pane after it plays what a
-conversion wrote — the Spine runtime, real Godot, or SkelForm's own web player
-on the written `.skf`. A rig is never converted into the format it arrived in.
+conversion wrote — the Spine runtime, real Godot, SkelForm's own web player on
+the written `.skf`, or DragonBones' own runtime on the written `_ske.json`.
+A rig is never converted into the format it arrived in.
 Only when a pane cannot be built (a Godot target without an engine binary to
 export with) does a side fall back to replaying through the Spine leg, and its
 folder name then says `via-spine`.
@@ -108,6 +116,13 @@ format stores key times as **integer frames**, so its `fps` decides how exactly
 the source's times survive: the converter picks 60 fps, moves to a finer grid
 only when that stops two keys from collapsing into one, and reports on the
 conversion line what the choice cost (`--fps` overrides it).
+
+`--to dragonbones` writes `<name>_ske.json` (the rig), `<name>_tex.json` (the
+texture atlas) and the page image, plus an `index.html` that plays them through
+the format's own runtime (pinned by commit). DragonBones stores key times as
+integer frames too — the same frame-rate rule and the same reporting apply — and
+rigid rectangles become image displays while everything else becomes a weighted
+mesh, so the file opens in LoongBones as a rig, not as a flattened picture.
 
 The converter runs on a bare `python3` (3.10+) — no install step, no runtime
 dependencies. Free and open-source dependencies are allowed where they earn
@@ -150,6 +165,12 @@ Every conversion direction has a browser preview:
 
 - **Godot→Spine** output: `view out.json` (or the convert step already emits
   `index.html`) — renders via the official `spine-webgl` runtime from the CDN.
+- **→DragonBones** output: the convert step writes `index.html` beside the
+  bundle and plays the written `_ske.json` + `_tex.json` through DragonBones'
+  own runtime (the same code LoongBones ships, pinned by commit). The runtime
+  is pinned to the **Pixi 5** line on purpose: the 8.x host never refreshes a
+  weighted mesh's vertex buffer after the first pose, so a skinned rig renders
+  frozen and scattered, while 5.x tracks the model within 0.3 units.
 - **Any Godot scene**: drop the `.tscn`'s folder in the studio and its first
   pane packs the scene with its referenced resources and runs it in the browser
   through the real engine — no conversion needed to look at it.
@@ -217,6 +238,33 @@ CI runs the fixture-free tier on Python 3.10–3.13
 Getting this wrong is the entire risk of skeletal conversion. These are the
 rules, stated once, relied on everywhere. They were each discovered as a bug
 that produced a plausible-looking but wrong rig.
+
+### DragonBones values are offsets, not poses
+
+DragonBones is the one target whose numbers are not the pose. The runtime
+composes a bone as `origin + offset + animationPose`, and `origin` is the setup
+transform the file declares (`Bone.init`: `this.origin = this._boneData.transform`)
+— so every `translateFrame`/`rotateFrame` value is a DELTA from that bone's
+setup, and `scaleFrame` multiplies it. Writing the absolute pose doubles the
+setup: the hero's hip landed at `-94.89 + -87.91`, 95 units below where the rig
+puts it, and every skinned mesh followed. The reader adds the setup back per
+channel; the writer subtracts it.
+
+The same leg needs no axis work: DragonBones is Y-down with a
+clockwise-positive rotation (`dragonBones.yDown = true` in the runtime's own
+bundle, and `Transform.toMatrix` writes the same `(cos, sin, -sin, cos)` block
+Godot's `Transform2D` does), so a local transform travels verbatim.
+
+Two more traps that cost real debugging:
+
+- **A missing `tweenEasing` is `-2` (held), not linear.** `ObjectDataParser`
+  defaults it to `-2`, so every interpolated frame must state `0` or carry a
+  `curve`; the writer emits the default only when the segment really is held.
+- **Two frames may not share a position.** A timeline frame's position is its
+  integer index; two keys closer together than one frame collapse onto one, and
+  a zero-length segment makes the runtime divide by zero and fill every bone
+  downstream with NaN. The writer keeps the later key of a collapse and the
+  bundle reports how many it cost.
 
 ### Axis convention
 

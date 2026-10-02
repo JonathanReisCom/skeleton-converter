@@ -207,7 +207,7 @@
         <button id="drop" type="button" aria-label="Choose the rig files">
           <span class="big">Choose the rig's folder</span>
           <span class="or">or drop it here</span>
-          <span class="accepts">spine .json + .atlas + page · godot .tscn · skelform .skf</span>
+          <span class="accepts">spine .json + .atlas + page · godot .tscn · skelform .skf · dragonbones _ske.json + _tex.json + page</span>
         </button>
         <input id="files" type="file" multiple hidden>
         <input id="folder" type="file" webkitdirectory multiple hidden>
@@ -308,7 +308,7 @@ function render() {
   if (framed.length) {
     const line = document.createElement("div");
     line.textContent = "frame rate applies to " + framed.map((t) => t.name).join(", ")
-      + " only — it keys animations on integer frames.";
+      + " only — those formats key animations on integer frames.";
     hint.append(line);
   }
 }

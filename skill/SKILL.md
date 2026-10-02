@@ -7,7 +7,7 @@ description: Convert 2D skeletal animation rigs between engine formats via a can
 
 A conversion hub for 2D skeletal animation rigs: one canonical in-memory model,  
 one importer and one exporter per format. Currently Godot 4 `Skeleton2D` scenes  
-(.tscn) ⇄ Spine JSON; DragonBones and LoongBones are planned adapters. Not  
+(.tscn), Spine JSON and DragonBones JSON (LoongBones reads the same files). Not  
 affiliated with Esoteric Software.
 
 ## Install
@@ -27,6 +27,10 @@ python3 -m src.cli convert --to godot path/to/hero.json -o out --name animation
 
 # Anything -> SkelForm bundle (out/animation.skf: armature + embedded pages)
 python3 -m src.cli convert --to skelform path/to/hero.json -o out --name animation
+
+# Anything -> DragonBones bundle (out/animation_ske.json + _tex.json + page)
+# These are the files LoongBones imports ("Import DragonBones Data Files").
+python3 -m src.cli convert --to dragonbones path/to/hero.json -o out --name animation
 
 # Upload, convert, compare in the browser (detects the source format)
 python3 -m src.studio            # http://localhost:8090 (make studio / studio-stop)
@@ -76,7 +80,13 @@ format).
    archive carrying the armature and the pages, plus a viewer that plays it
    with SkelForm's own web player; it stores key times as integer
    frames, so the chosen fps (60 unless a finer grid avoids a key collision,
-   `--fps` to force one) is reported with what it cost.
+   `--fps` to force one) is reported with what it cost. `--to dragonbones`
+   writes `<name>_ske.json`, `<name>_tex.json` and the page, plus a viewer that
+   plays them through DragonBones' own runtime; its key times are integer
+   frames too, with the same fps rule and the same report. Its values are
+   OFFSETS from each bone's setup (the runtime composes `origin + offset +
+   animationPose`), so reading the numbers as poses puts every animated bone
+   one setup offset away from where the rig is.
 3. **Validate numerically** — never by eye:
 
    ```bash

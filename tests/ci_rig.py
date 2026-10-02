@@ -148,11 +148,13 @@ def write_spine_export(directory: Path) -> Path:
     return json_path
 
 
-def verify(godot_dir: Path, spine_dir: Path, skelform_dir: Path) -> int:
+def verify(godot_dir: Path, spine_dir: Path, skelform_dir: Path,
+           dragonbones_dir: Path | None = None) -> int:
     """The CLI end-to-end contract: every wired direction wrote its bundle.
 
     A SkelForm bundle is one archive, so it is checked by opening it: the
-    armature and the rig's page must both be inside.
+    armature and the rig's page must both be inside. A DragonBones bundle is
+    three files the runtime loads by name, so each of them is checked too.
     """
     expected = [
         godot_dir / "output" / f"{STEM}.tscn",
@@ -162,6 +164,13 @@ def verify(godot_dir: Path, spine_dir: Path, skelform_dir: Path) -> int:
         spine_dir / "output" / f"{STEM}.atlas",
         spine_dir / "output" / PAGE,
     ]
+    if dragonbones_dir is not None:
+        expected += [
+            dragonbones_dir / "index.html",
+            dragonbones_dir / "output" / f"{STEM}_ske.json",
+            dragonbones_dir / "output" / f"{STEM}_tex.json",
+            dragonbones_dir / "output" / PAGE,
+        ]
     missing = [str(path) for path in expected if not path.is_file()]
     bundle = skelform_dir / "output" / f"{STEM}.skf"
     members = []
@@ -190,9 +199,11 @@ def main(argv: list) -> int:
         print(write_spine_export(Path(argv[2])))
         return 0
     if len(argv) >= 5 and argv[1] == "verify":
-        return verify(Path(argv[2]), Path(argv[3]), Path(argv[4]))
+        return verify(Path(argv[2]), Path(argv[3]), Path(argv[4]),
+                      Path(argv[5]) if len(argv) > 5 else None)
     print("usage: python3 -m tests.ci_rig build <dir> | "
-          "verify <godot-dir> <spine-dir> <skelform-dir>", file=sys.stderr)
+          "verify <godot-dir> <spine-dir> <skelform-dir> [<dragonbones-dir>]",
+          file=sys.stderr)
     return 2
 
 

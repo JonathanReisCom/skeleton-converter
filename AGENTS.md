@@ -6,7 +6,9 @@ Conventions for AI agents and humans working on this repository.
 
 A conversion hub for 2D skeletal animation rigs: one canonical in-memory model,
 one importer and one exporter per format. Currently: Godot Skeleton2D scenes
-(.tscn) ⇄ Spine JSON; more formats planned (DragonBones, LoongBones).
+(.tscn), Spine JSON and DragonBones JSON — the last of which is also what
+LoongBones reads and writes (LoongBones is DragonBonesJS rebranded; the runtime
+itself says so in its console banner from commit 64b6c69).
 
 ## Language
 
@@ -195,6 +197,42 @@ path. Consequences to respect:
    `pose-sample-godot.gd` or `pose-sample-spine.mjs`) and add it to the
    cross-engine validation.
 6. Only then add the format to the registry.
+
+### DragonBones rules (learned the hard way)
+
+- **A timeline value is an offset, not a pose.** The runtime composes a bone as
+  `origin + offset + animationPose`, with `origin` the setup the file declares
+  (`Bone.init`), and multiplies the scales. Writing the absolute pose doubles
+  the setup; the reader adds it back per channel.
+- **No axis work.** DragonBones is Y-down and clockwise-positive, like Godot:
+  `dragonBones.yDown = true`, and `Transform.toMatrix` writes the same
+  `(cos, sin, -sin, cos)` block. A local transform travels verbatim — but the
+  matrix FIELD ORDER is the transpose (`x' = a·x + c·y`), so any matrix crossing
+  into this format goes through `godot_matrix_from_standard`.
+- **A missing `tweenEasing` is `-2` (held).** Every interpolated frame must
+  state `0` or carry a `curve`, or the runtime holds it.
+- **Two frames may not share a position.** Frames are integer indices; a
+  zero-length segment makes the runtime divide by zero and NaN the whole
+  subtree. Collapsed keys keep the later value, and the bundle reports the cost.
+- **A rigid quad is an image display, everything else a weighted mesh.** An
+  image display is a sprite: state `pivot` explicitly (the parser's default is
+  the CENTRE, 0.5/0.5, while the writer anchors the top-left), and only for a
+  quad that follows ONE bone at full weight with no FFD — a sprite cannot carry
+  a skin or a deform.
+- **`bind_worlds` from the Spine reader is in SPINE space.** `out_skelform` says
+  so and conjugates it; the DragonBones writer does the same. Reading it raw
+  mirrors every skinned mesh about the origin.
+- **The pane pins Pixi 5, not 8.** The 8.x host leaves a weighted mesh's vertex
+  buffer at the pose it was first built with — the rig renders frozen and
+  scattered. Measured on the same bundle: 5.x tracks the model within 0.3 units
+  at t=0.5 s, 8.x never changes a vertex. `previewFreeze` also calls
+  `armature.invalidUpdate()` and then advances by a tenth of a millisecond with
+  `timeScale` temporarily open, because a zero-length advance updates nothing
+  while the pane is frozen.
+- **Frame rate is a fidelity choice, and it is reported.** Key times are
+  integer frames, so the converter picks the finest of a ladder that fits and
+  says on the conversion line how many keys landed off the grid and how many
+  collapsed.
 
 ## Verification discipline
 

@@ -101,23 +101,31 @@ def _rig_pages(input_path: str, source: str, atlas_path: str | None, model):
     yield pages
 
 
-# SkelForm stores key times as integer frame indices, so a rig authored on
-# another time base moves its keys by up to half a frame and can even collapse
-# two nearby keys into one. 60 is the format's own default; a finer grid is
-# used only when it removes a collapse, because the residual shift of a few
-# milliseconds is not worth a dense editor timeline.
+# SkelForm and DragonBones both store key times as integer frame indices, so a
+# rig authored on another time base moves its keys by up to half a frame and
+# can even collapse two nearby keys into one. The first rate is the format's own
+# default; a finer grid is used only when it removes a collapse, because the
+# residual shift of a few milliseconds is not worth a dense editor timeline.
 SKELFORM_FPS = (60, 120, 240)
+DRAGONBONES_FPS = (24, 30, 60, 120, 240)
 
 
-def _skelform_timing(model) -> tuple[float, str | None]:
-    """Pick the frame rate and describe what it costs (``None`` if exact)."""
+def _frame_timing(model, rates: tuple, label: str) -> tuple[float, str | None]:
+    """Pick the frame rate and describe what it costs (``None`` if exact).
+
+    A source that declares its own rate is tried first: converting a file back
+    to its own format should not move it onto a different grid when the grid it
+    was authored on still holds every key.
+    """
+    if model.frame_rate and model.frame_rate not in rates:
+        rates = (float(model.frame_rate),) + tuple(rates)
     channels = [keys for tracks in model.animations.values()
                 for chans in tracks.values() for keys in chans.values()]
     times = [k.time for keys in channels for k in keys]
     if not times:
-        return float(SKELFORM_FPS[0]), None
+        return float(rates[0]), None
     best = None
-    for fps in SKELFORM_FPS:
+    for fps in rates:
         collapses = 0
         for keys in channels:
             frames = [round(k.time * fps) for k in keys]
@@ -126,12 +134,12 @@ def _skelform_timing(model) -> tuple[float, str | None]:
         score = (collapses, shift)
         if best is None or score < best[0]:
             best = (score, fps, collapses, shift)
-        if collapses == 0 and fps == SKELFORM_FPS[0]:
+        if collapses == 0 and fps == rates[0]:
             break
     (_score, fps, collapses, shift) = best
     if not collapses and shift < 1e-6:
         return float(fps), None
-    note = (f"SkelForm stores integer frames: {fps} fps, "
+    note = (f"{label} stores integer frames: {fps} fps, "
             f"{sum(1 for t in times if abs(t - round(t * fps) / fps) > 1e-6)} "
             f"of {len(times)} key times land off the grid "
             f"(worst {shift * 1000:.1f} ms)"
@@ -161,6 +169,11 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
             f"-o takes a directory, not a file: {out} "
             f"(try: {out.parent} --name {out.stem})")
     name = name or Path(input_path).stem
+    if source == "dragonbones" and name.endswith("_ske"):
+        # A DragonBones bundle is named by its stem WITHOUT the `_ske` suffix:
+        # the data, the texture atlas and the page all share it, and keeping
+        # the suffix would name the next bundle `rig_ske_ske`.
+        name = name[: -len("_ske")]
     result = ConvertResult(out_dir=out, name=name)
 
     step(f"reading {source}: {input_path}")
@@ -270,7 +283,7 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         artifacts.mkdir(parents=True, exist_ok=True)
         output = artifacts / f"{name}.skf"
         if fps is None:
-            fps, timing_note = _skelform_timing(model)
+            fps, timing_note = _frame_timing(model, SKELFORM_FPS, "SkelForm")
             if timing_note:
                 result.notes.append(timing_note)
         else:
@@ -307,8 +320,57 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
         step(f"web preview: {out / 'index.html'} (SkelForm's own web player)")
         step("next: open it in the SkelForm editor, or serve the folder and "
              "play it in the browser")
+    elif target == "dragonbones":
+        step("writing DragonBones bundle (_ske.json + _tex.json + texture + viewer)")
+        artifacts = out / "output"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        output = artifacts / f"{name}_ske.json"
+        atlas_out = artifacts / f"{name}_tex.json"
+        if fps is None:
+            fps, timing_note = _frame_timing(model, DRAGONBONES_FPS, "DragonBones")
+            if timing_note:
+                result.notes.append(timing_note)
+        else:
+            timing_note = None
+        with _rig_pages(input_path, source, atlas_path, model) as pages:
+            if not pages:
+                result.notes.append(
+                    f"{source}: no page image found — the bundle is written "
+                    "without a texture, so a preview draws it untextured")
+            image_path = pages[0] if pages else None
+            image_name = (name + Path(image_path).suffix) if image_path else "image.png"
+            registry.WRITERS["dragonbones"](model, str(output),
+                                            image_name=image_name,
+                                            image_path=image_path, fps=fps)
+            if image_path and Path(image_path) != artifacts / image_name:
+                shutil.copy2(image_path, artifacts / image_name)
+            if len(pages) > 1:
+                result.notes.append(
+                    f"{source}: multi-page atlas — the DragonBones leg writes "
+                    "one page, so attachments on the other pages sample the "
+                    "wrong pixels")
+        from . import dragonbones_viewer_out
+        dragonbones_viewer_out.emit_viewer(
+            str(out / "index.html"),
+            f"output/{output.name}",
+            f"output/{atlas_out.name}",
+            f"output/{image_name}")
+        result.previewable = True
+        result.files = [out / "index.html", output, atlas_out]
+        if image_path:
+            result.files.append(artifacts / image_name)
+        step(f"wrote index.html + output/{output.name}, output/{atlas_out.name}, "
+             f"output/{image_name} at {fps:g} fps")
+        if timing_note:
+            step(timing_note)
+        step(f"{result.stats['bones']} bones, "
+             f"{result.stats['attachments']} attachments, "
+             f"{result.stats['animations']} animations")
+        step("web preview: " + str(out / "index.html")
+             + " (DragonBones' own Pixi runtime)")
+        step("next: import the bundle in LoongBones (DragonBones Data Files), "
+             "or serve the folder and play it in the browser")
     else:
-        step("writing Godot scene (.tscn + page image)")
         output = out / f"{name}.tscn"
         # The rig's first page is re-stemmed to the bundle name (the scene
         # references res://<name>.<ext>); every further page keeps its own
