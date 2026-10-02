@@ -31,6 +31,14 @@ const ATLAS_URL = ATLAS_PARAM || "__DEFAULT_ATLAS__"
   || (new URLSearchParams(location.search).get("skeleton")
       ? SKELETON_URL.replace(/\.json$/, ".atlas") : "");
 const FIRST_ANIMATION = "__FIRST_ANIMATION__";
+// Skin: ?skin=<name> wins, then the rig's FIRST skin, baked in at generation
+// time. Spine flags the bones a skin owns (`skin: true`) and
+// `Skeleton.updateCache` hides them unless that skin is ACTIVE, so a weapon
+// that lives in its own skin — the hero's sword sits in `weapon/sword` — is in
+// the file and the atlas but never drawn under `default`. This is the editor's
+// skin picker.
+const SKIN_PARAM = new URLSearchParams(location.search).get("skin")
+  || "__DEFAULT_SKIN__";
 
 const canvas = document.getElementById("canvas");
 if (!window.hud) {
@@ -45,6 +53,7 @@ if (!window.hud) {
 const nodes = hud.mount({ title: "spine 4.2" });
 hud.watchErrors(nodes);
 const explorer = hud.explorer();
+const skinExplorer = hud.explorer("skins");
 let state = null, skeleton = null;
 // Playback speed. AnimationState.timeScale multiplies the delta the state is
 // updated with, so the pose stays exact and only the clock scales — the same
@@ -103,6 +112,61 @@ function showAttachments(skeleton) {
   hud.explorerRows(explorer, attachmentRows(skeleton));
 }
 
+// Skin picker. A rig can ship variants — the hero's `weapon/sword` and
+// `weapon/morningstar` — and Spine draws the bones a skin owns ONLY while that
+// skin is active, so without this control the sword in the file cannot be
+// seen. The list comes from the runtime, so it matches what the data holds.
+function skinRows(skeleton) {
+  const names = (skeleton.data.skins || []).map(skin => skin.name);
+  // One skin is not a choice: every rig has `default`.
+  if (names.length < 2) return [];
+  return [{
+    name: "skin",
+    options: names,
+    value: skeleton.skin ? skeleton.skin.name : "",
+    onPick: (value) => {
+      if (!value || !skeleton.data.findSkin(value)) return;
+      skeleton.setSkinByName(value);
+      // The runtime's documented step after a skin change: `setSkin` only
+      // re-attaches what the OLD skin had attached, so a slot the previous
+      // skin left empty (or a pushed "(none)") would stay empty for good.
+      // Setup pose first, then the animation's own attachment keys.
+      skeleton.setSlotsToSetupPose();
+      // The state holds the ATTACHMENT keys the animation applies; re-applying
+      // it after the skin change keeps the pose on the new skin exactly as the
+      // editor does when you switch skins mid-playback.
+      state.apply(skeleton);
+      skeleton.update(0);
+      skeleton.updateWorldTransform(spine.Physics.update);
+      // A skin changes which attachments draw, so it changes the box too.
+      if (window.__fitIfResized) window.__fitIfResized();
+      window.__skin = value;
+    },
+  }];
+}
+
+// What the CURRENT skin draws, slot by slot. This has to come from the
+// runtime, not from the slot's attachment name: under `default` the sword's
+// slot still NAMES the sword (it is the default skin's entry) and nothing
+// draws it, because `Skeleton.updateCache` left the bone the `weapon/sword`
+// skin owns inactive. The compare shell pushes this set to the panes that have
+// no skins of their own, so one row moves every pane to the same variant.
+function drawnBySlot() {
+  const out = {};
+  skeleton.slots.forEach(slot => {
+    const attachment = slot.attachment;
+    out[slot.data.name] = (attachment && slot.bone.active)
+      ? attachment.name : "";
+  });
+  return out;
+}
+
+function showSkins(skeleton) {
+  window.__skinRows = () => skinRows(skeleton);
+  window.__drawnBySlot = drawnBySlot;
+  hud.explorerRows(skinExplorer, skinRows(skeleton));
+}
+
 new spine.SpineCanvas(canvas, {
   pathPrefix: "",
   webglConfig: { alpha: true },
@@ -140,6 +204,13 @@ new spine.SpineCanvas(canvas, {
       const json = new spine.SkeletonJson(new spine.AtlasAttachmentLoader(atlas));
       skeleton = new spine.Skeleton(json.readSkeletonData(assetManager.get(SKELETON_URL)));
       hud.setNote(nodes, SKELETON_URL);
+      // Before the first `state.apply`: the animation's attachment keys land on
+      // top of whatever the skin equipped, exactly as in the editor.
+      if (SKIN_PARAM && skeleton.data.findSkin(SKIN_PARAM)) {
+        skeleton.setSkinByName(SKIN_PARAM);
+      } else if (SKIN_PARAM) {
+        hud.setNote(nodes, SKELETON_URL + " — no skin named " + SKIN_PARAM);
+      }
 
       state = new spine.AnimationState(new spine.AnimationStateData(skeleton.data));
       state.timeScale = speedValue;
@@ -195,6 +266,7 @@ new spine.SpineCanvas(canvas, {
 
       showTracks(state.data);
       showAttachments(skeleton);
+      showSkins(skeleton);
       // Premultiplied-alpha atlases (pma:true) need the flag on the renderer
       // or regions sample washed; non-PMA atlases (the default) are unchanged.
       // It is read from the atlas, NOT assumed: every exporter leaves fully

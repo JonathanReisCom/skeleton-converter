@@ -218,6 +218,47 @@ which drew the Godot rig 2.6% smaller than the panes beside it — visible as th
 foot sitting off the grid line. The godot->spine leg keeps its bind pose
 instead: there the bind IS the polygon's frame.
 
+**A skin is a variant of the WHOLE rig, and only the ACTIVE skin's bones draw.**
+Spine flags each bone a skin owns with `"skin": true` (`skinRequired`);
+`Skeleton.updateCache` starts those bones inactive and then activates the ones
+the active skin lists *and their ancestors*. So the hero really does hide its
+sword under `default` — the sword's bone belongs to the `weapon/sword` skin —
+and the pinned runtime (`spine-webgl@4.2.120`) is where that was confirmed, not
+the docs. Three things it cost:
+
+- **An inactive bone still has a pose.** The solver used to leave its world at
+  `(0, 0)` to mirror the runtime, which wrote the sword's region as a quad with
+  all four corners at the origin: invisible in every converted pane *and*
+  impossible to equip in a viewer. An inactive bone now takes plain FK, so its
+  geometry is the rig's; `equipped` is the only thing the skin gates, and the
+  panes' framing already skips `visible = false` polygons, so a weapon the
+  source does not draw cannot inflate the box.
+- **Converting "with the sword" means naming the skin**: `bundle.convert(skin=…)`,
+  `--skin`, the studio's skin select (read in the browser from the picked JSON,
+  so it is there before the first conversion) and the pane's own picker all set
+  one. A name the rig does not have is refused with the list — falling back to
+  another variant silently hands back a rig without the weapon.
+- **The skin decides what draws, so the sidebar owns the row — and one row has
+  to move every pane.** Inside a compare shell a pane hides its own HUD chrome,
+  so the control lives in the shell's sidebar (`__skinRows`) and a pane opened
+  alone keeps its own `skins` toggle. `?skin=` links a pane to one, and with
+  nothing named a pane opens **equipped with the rig's FIRST skin** — file
+  order, not the name `default`, resolved by `in_spine.skin_names_in` so the
+  pane cannot open on a different variant than the conversion wrote. Three
+  things make the row global:
+  - the pane that HAS skins answers `__drawnBySlot()` — the runtime's own
+    answer, bone activeness included, because under `default` the sword's slot
+    still NAMES the sword and only the inactive bone stops it drawing;
+  - the panes WITHOUT skins (Godot, SkelForm) follow through the per-slot
+    control a slots row already uses, so one switch moves all three. Pushing
+    into the skin-capable pane instead is a trap: a pushed `(none)` nulls a slot
+    that the next `setSkin` cannot restore (`setSkin` only re-attaches what the
+    OLD skin had);
+  - the push is re-entrant by construction — each pane's pick pings
+    `__attachmentsChanged`, which calls back in — and the SkelForm pane died of
+    that loop (a blank canvas, no error). Hence the `applyingSkin` guard, and
+    `setSlotsToSetupPose()` after `setSkinByName` so a switch is reversible.
+
 **All three panes frame the rig with the same number** — `hud.fitScale`
 (`src/static/hud.js`, `MARGIN = 0.85`), so a size difference in a comparison
 is the rig's, never the pane's. The Spine and SkelForm viewers call it

@@ -8,7 +8,9 @@ runtime's drawing rules.
 
 from pathlib import Path
 
-from src.in_spine import _deform_pairs
+import json
+
+from src.in_spine import _deform_pairs, read_skeleton
 from src.mesh_parity import mesh_parity
 
 SAMPLES = [
@@ -25,6 +27,53 @@ def test_skin_attachments_match_the_runtime():
             continue
         violations = mesh_parity(str(json_path), str(atlas))
         assert not violations, f"{name}: {len(violations)} mesh parity violations:\n" + "\n".join(violations)
+
+def test_an_entry_the_active_skin_leaves_inactive_still_has_geometry(tmp_path):
+    """The hero's sword: `skin: true`, its own skin, and no atlas needed.
+
+    Spine's runtime skips a bone the active skin leaves inactive, so its world
+    transform stays where it was — the runtime's own ``(0, 0)``. Mirroring that
+    literally wrote the attachment as a quad with all four corners at the
+    origin: invisible in every converted pane and impossible to equip in a
+    viewer. The bone's pose is rig data, so the geometry must not depend on
+    which skin happens to be active — only ``equipped`` does.
+    """
+    rig = {
+        "skeleton": {"spine": "4.2.33"},
+        "bones": [
+            {"name": "root"},
+            {"name": "hand", "parent": "root", "x": 40.0, "y": -12.0,
+             "rotation": 90.0, "length": 10.0},
+            {"name": "weapon", "parent": "hand", "x": 15.0, "y": 1.0,
+             "rotation": 77.0, "length": 60.0, "skin": True},
+        ],
+        "slots": [{"name": "weapon", "bone": "weapon", "attachment": "sword"}],
+        "skins": [
+            {"name": "default", "attachments": {"weapon": {
+                "sword": {"type": "region", "x": 20.0, "y": 0.0,
+                          "width": 60.0, "height": 12.0}}}},
+            {"name": "armed", "bones": ["weapon"]},
+        ],
+        "animations": {},
+    }
+    path = tmp_path / "rig.json"
+    path.write_text(json.dumps(rig), encoding="utf-8")
+
+    def sword(skin):
+        model = read_skeleton(str(path), skin=skin)
+        return next(a for a in model.attachments if a.name == "sword")
+
+    default, armed = sword(None), sword("armed")
+    assert not default.equipped, "the sword draws only under its own skin"
+    assert armed.equipped
+    # Same geometry either way: the skin decides whether the entry DRAWS, not
+    # where its vertices are — that is why equipping it in a viewer works.
+    assert default.position == armed.position
+    assert default.polygon == armed.polygon
+    span = (max(p[0] for p in default.polygon)
+            - min(p[0] for p in default.polygon))
+    assert span > 1.0, "the region quad collapsed to a point"
+
 
 def test_weighted_deform_offsets_use_the_pair_buffer():
     """A weighted mesh's deform buffer drops bone index and weight.

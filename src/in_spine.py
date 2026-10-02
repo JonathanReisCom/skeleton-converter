@@ -26,6 +26,23 @@ def read_spine(path: str) -> dict:
     return data
 
 
+def skin_names_in(spine: dict) -> list[str]:
+    """The rig's skin names, in file order (``default`` first).
+
+    A skin is a variant of the whole rig, not just a set of attachments: it
+    declares the bones it owns and Spine's runtime draws those only while the
+    skin is ACTIVE (`Skeleton.updateCache`). So this is the list a caller
+    offers when asking which variant to convert.
+    """
+    return [entry["name"] for entry in (spine.get("skins") or [])
+            if isinstance(entry, dict) and entry.get("name")]
+
+
+def skin_names(path: str) -> list[str]:
+    """``skin_names_in`` for a rig still on disk."""
+    return skin_names_in(read_spine(path))
+
+
 def read_atlas_regions(atlas_path: str | None) -> dict:
     """Region name -> {x, y, width, height, degrees, originalWidth, ...}.
 
@@ -85,9 +102,12 @@ def read_atlas_regions(atlas_path: str | None) -> dict:
 
 def constraint_worlds(spine: dict, skin: str | None = None) -> dict:
     """Bone name -> world matrix (spine space, y-up) from the RUNTIME solver:
-    setup pose, constraints applied, skin gating. The runtime leaves bones a
-    `skin: true` constraint deactivates at (0, 0); plain FK would place them
-    at their setup transforms. This is the ground truth the converted meshes
+    setup pose, constraints applied, skin gating. The runtime skips a bone a
+    `skin: true` entry deactivates, leaving its world where it was — a stale
+    (0, 0) that is a runtime artifact, not rig data. The solver gives such a
+    bone its plain FK instead (see `ConstraintSolver.apply`), so an attachment
+    the active skin does not equip still has the geometry a converter or a
+    viewer needs to equip it. This is the ground truth the converted meshes
     must match."""
     from . import constraints
     solver = constraints.ConstraintSolver(spine, skin=skin)
@@ -351,6 +371,10 @@ def read_skeleton(json_path: str, atlas_path: str | None = None,
     # default-skin rig must not render the chain its JSON and atlas still
     # describe. Without this the converted rig draws weapons the Spine pane
     # never shows, and they stretch its framing box out with them.
+    # Only the `equipped` flag is gated: the geometry is still read, because a
+    # viewer equipping the entry (or a conversion done under that skin) needs
+    # it, and skipping the bone's transform is what left the sword a
+    # degenerate quad nobody could draw.
     from . import constraints
     inactive = (set(bone["name"] for bone in spine["bones"])
                 - constraints.active_bones(spine, skin))

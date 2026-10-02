@@ -290,17 +290,21 @@ class ConstraintSolver:
 
     def apply(self) -> None:
         """Run every constraint, updating the bone world transforms."""
-        # The runtime builds its updateCache from ACTIVE bones only, so a bone
-        # deactivated by the skin is never transformed and keeps (0, 0). Skip
-        # them here too, or the export would place bones the source engine
-        # leaves at the origin.
+        # Which bones the active skin leaves ACTIVE. Constraints still gate on
+        # this (`_is_active`): a `skin: true` constraint belongs to a skin and
+        # must not run under another one. Visibility does too — see
+        # `active_bones` and `Skeleton.updateCache`.
         self.active = {name: self._bone_active(st) for name, st in self.bones.items()}
 
+        # Every bone is reset, ACTIVE or not. A bone the skin deactivates is
+        # not DRAWN, but its rest pose is still rig data: the runtime leaves
+        # its world untouched (`updateCache` marks it `active = false` and
+        # `updateWorldTransform` skips it), so mirroring the runtime literally
+        # read the hero's sword at (0, 0) — a degenerate polygon no viewer
+        # could equip and no writer could re-emit. Visibility is the
+        # `equipped` flag, which every consumer already gates on; the world
+        # transform here is what the rig says, so a converter can carry it.
         for state in self.bones.values():
-            if not self.active[state.name]:
-                state.world_x = state.world_y = 0.0
-                state.a = state.b = state.c = state.d = 0.0
-                continue
             state.set_to_setup()
             self._reset_world(state)
 
@@ -318,12 +322,15 @@ class ConstraintSolver:
         # parents and undo the placement (the hero's chains drifted up to 4.5
         # units, growing along the chain). Only bones the path did not settle
         # are re-propagated; that is what catches IK descendants like foot1.
+        # Inactive bones take this pass too: nothing drove them, so their
+        # locals are still their setup, and this is the plain FK world a
+        # consumer needs to equip or convert them at all.
         settled = set()
         for kind, constraint in self._order:
             if kind == "path" and self._is_active(constraint):
                 settled.update(constraint.get("bones") or [])
         for state in self.bones.values():
-            if not self.active[state.name] or state.name in settled:
+            if state.name in settled:
                 continue
             state.update_world_transform_with(
                 state.ax, state.ay, state.arotation, state.ascale_x,
@@ -333,9 +340,11 @@ class ConstraintSolver:
     def _bone_active(self, state: BoneState) -> bool:
         """Whether the runtime considers this bone active under the skin.
 
-        Inactive bones are not transformed at all, so the hero's chain bones
-        read ``(0, 0)`` under the ``default`` skin while the morningstar weapon
-        is not equipped. The rule lives in ``active_bones``; see Skeleton.updateCache.
+        This decides whether the bone DRAWS (its slots' entries are not
+        equipped) and whether a skin-owned constraint runs — not whether the
+        bone has a transform: the hero's chain bones still carry their setup
+        FK under the ``default`` skin, so the morningstar can be equipped and
+        converted. The rule lives in ``active_bones``; see Skeleton.updateCache.
         """
         if self._active_cache is None:
             self._active_cache = active_bones(self.spine, self.skin)

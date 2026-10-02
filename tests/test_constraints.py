@@ -92,10 +92,14 @@ def test_ik_with_mix_zero_is_inactive():
 
 
 def test_skin_required_bone_is_inactive_and_keeps_no_baked_keys():
-    """A bone the active skin deactivates is not transformed by the runtime.
+    """A bone the active skin deactivates is not DRAWN, but it still has a pose.
 
     The hero's weapons and chains are ``skin: true``; under the default skin
-    the engine leaves them at (0, 0). Baking keys for them would animate what
+    the engine skips them, and its world transform stays where it was — a
+    stale (0, 0) that is a runtime artifact, not rig data. The rig itself
+    still says where the bone is (here: the chain hangs off ``hip``), and a
+    converter has to carry that or the attachment is a degenerate quad no
+    viewer can equip. Baking keys for it stays out: that WOULD animate what
     the source does not, which showed up as a 228-unit divergence.
     """
     rig = _two_bone_ik_rig()
@@ -107,7 +111,10 @@ def test_skin_required_bone_is_inactive_and_keeps_no_baked_keys():
     solver = ConstraintSolver(rig, skin="default")
     solver.apply()
     assert not solver.active["chain1"], "skin-required bone should be inactive"
-    assert (solver.bones["chain1"].world_x, solver.bones["chain1"].world_y) == (0.0, 0.0)
+    hip = solver.bones["hip"]
+    chain = solver.bones["chain1"]
+    assert math.isclose(chain.world_x, hip.world_x + 8.0, abs_tol=1e-9)
+    assert math.isclose(chain.world_y, hip.world_y, abs_tol=1e-9)
 
     baked = bake_animation(rig, "swing", skin="default")
     assert "chain1" not in baked

@@ -207,6 +207,43 @@ this roadmap draws on: [docs/2d-skeletal-animation-landscape.md](docs/2d-skeleta
       framing box went from 338.76 to 330.12 units — matching the Spine and
       SkelForm panes to the digit. Pinned by
       `tests/test_generated_output.py::test_skinning_basis_matches_the_frame_the_polygons_are_in`
+- [x] ~~A weapon that lives in its own skin was missing from every pane~~ —
+      FIXED, and no reader was dropping it. Spine flags the bones a skin owns
+      (`"skin": true`) and `Skeleton.updateCache` activates only the ACTIVE
+      skin's bones, so `hero-pro` genuinely hides its sword under `default`;
+      verified in the pinned runtime itself (`spine-webgl@4.2.120`:
+      `bone.active = !bone.data.skinRequired`, then each skin's own bones and
+      their ancestors). Two real defects came out of chasing it:
+      1. the solver mirrored the runtime by leaving an inactive bone's world at
+         `(0, 0)`, which wrote the sword's entry as a quad with all four
+         corners at the origin — invisible in the converted panes and
+         impossible to equip in a viewer. An inactive bone now takes plain FK,
+         so its geometry is the rig's; `equipped` is the only thing the skin
+         gates, and the pane's framing box already skips the `visible = false`
+         polygons, so no weapon crept into the box;
+      2. there was no way to convert WITH a weapon: `bundle.convert(skin=…)`,
+         `--skin` on the CLI, a skin picker in the studio (read client-side
+         from the picked JSON, so it is there before the first conversion) and
+         one in the Spine pane itself (`setSkinByName`, plus `?skin=` for a
+         link). A name the rig does not have is refused with the list, because
+         silently converting another variant hands back a rig without the
+         weapon and no sign anything went wrong.
+      The sidebar's skin row is GLOBAL, because a comparison that switches one
+      pane and not the others compares two variants: the pane that has skins
+      reports what its runtime draws (`__drawnBySlot`, bone activeness
+      included) and the panes without one follow through the same per-slot
+      control a slots row already uses. Two traps it cost: pushing into the
+      skin-capable pane nulls a slot its next `setSkin` cannot restore
+      (`setSkin` only re-attaches what the OLD skin had), and the push
+      re-enters `__attachmentsChanged` — the SkelForm pane died of that loop,
+      a blank canvas with no error.
+      Measured: `spine→godot --skin weapon/sword` writes the sword's polygon
+      at the SAME four vertices as `default` and flips it from `visible =
+      false` to drawn; the three panes then show the sword, and switching the
+      pane's picker back to `default` removes it (the rig has no animation
+      channels for `weapon-sword` at all, so nothing needed baking). Pinned by
+      `tests/test_mesh_parity.py::test_an_entry_the_active_skin_leaves_inactive_still_has_geometry`
+      and `tests/test_studio.py::test_an_unknown_skin_is_refused_with_the_list`
 - [ ] **A native Godot scene can preview almost empty** (`preview_scene`): the
       `hero` demo's raw scene draws a single attachment in the wrapper. The
       wrapper frames authored vertices while a demo rig is posed by its own

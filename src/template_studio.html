@@ -94,12 +94,15 @@
   .field { display: flex; flex-direction: column; gap: 6px;
            font: 500 12px/1 var(--ui); letter-spacing: 0.04em;
            text-transform: uppercase; color: var(--muted); }
-  .field input { font: 400 14px var(--ui); color: var(--text); background: var(--bg);
+  .field input, .field select { font: 400 14px var(--ui); color: var(--text);
+                 background: var(--bg);
                  border: 1px solid var(--border); border-radius: var(--radius-sm);
                  padding: 11px 12px; width: 100%; }
-  .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px;
+  .field input:focus-visible, .field select:focus-visible {
+                 outline: 2px solid var(--accent); outline-offset: 1px;
                                border-color: var(--accent); }
   .field input::placeholder { color: #717171; }
+  .field select[disabled] { color: #717171; }
 
   /* Chips: anything you can pick is a chip, filled when it is the choice. */
   .chip { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -212,6 +215,7 @@
       </div>
       <div class="controls">
         <label class="field">frame rate <input id="fps" type="number" min="1" max="1000" placeholder="auto"></label>
+        <label class="field">skin <select id="skin" disabled><option value="">the rig's first</option></select></label>
         <label class="field">output name <input id="name" placeholder="from the file"></label>
         <button id="pickfolder" class="chip" type="button">Choose a folder</button>
         <button id="go" class="chip primary" disabled>Convert</button>
@@ -255,6 +259,7 @@ const folderInput = document.getElementById("folder");
 const pickFolder = document.getElementById("pickfolder");
 const picked = document.getElementById("picked");
 const fpsInput = document.getElementById("fps");
+const skinInput = document.getElementById("skin");
 const nameInput = document.getElementById("name");
 const goBtn = document.getElementById("go");
 const logBox = document.getElementById("log");
@@ -308,6 +313,39 @@ function render() {
   }
 }
 
+// The skins come from the file the user picked: the browser already holds the
+// JSON, and Spine hides the bones a skin owns unless that skin is ACTIVE — so a
+// rig whose weapon lives in its own skin (`weapon/sword`) has to name it before
+// the conversion, or the weapon is neither drawn nor animated. The panes offer
+// the same choice at playback; this is what the CLI's `--skin` does.
+async function fillSkins() {
+  const rig = files.find((file) => file.name.endsWith(".json"));
+  skinInput.innerHTML = "";
+  skinInput.disabled = true;
+  const fallback = document.createElement("option");
+  fallback.value = "";
+  fallback.textContent = "the rig's first";
+  skinInput.append(fallback);
+  if (!rig) return;
+  let names = [];
+  try {
+    const data = JSON.parse(await rig.text()) || {};
+    names = (data.skins || []).map((skin) => skin && skin.name).filter(Boolean);
+  } catch (error) {
+    return;  // not a skeleton JSON — the server reports that, not this control
+  }
+  // One skin is not a choice: every rig has a `default`.
+  if (names.length < 2) return;
+  skinInput.innerHTML = "";
+  for (const name of names) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    skinInput.append(option);
+  }
+  skinInput.disabled = false;
+}
+
 function take(list) {
   // A chosen folder carries editor droppings (.DS_Store, .import caches); the
   // rig and its companions are what the conversion reads.
@@ -316,6 +354,7 @@ function take(list) {
   if (!nameInput.value) nameInput.placeholder = stem || "from the file";
   errorBox.hidden = true;
   render();
+  fillSkins();
 }
 
 drop.onclick = () => input.click();
@@ -387,6 +426,7 @@ goBtn.onclick = async () => {
     files: [],
     name: nameInput.value.trim() || null,
     fps: fpsInput.value ? Number(fpsInput.value) : null,
+    skin: skinInput.value || null,
   };
   goBtn.disabled = true;
   goBtn.textContent = "Converting";

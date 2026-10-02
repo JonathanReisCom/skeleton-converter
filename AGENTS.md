@@ -413,6 +413,13 @@ The repeatable procedure:
    # then: src.compare_out.emit_compare(Path('tmp/cmp/1-source'), Path('tmp/cmp/2-target'))
    ```
 
+   A rig whose weapon lives in its own skin needs `--skin <name>` to be
+   converted *with* it: Spine flags those bones (`"skin": true`) and draws them
+   only while that skin is active, so both the panes and the converted file
+   show the weapon only when the conversion names the skin (the studio's skin
+   select does the same thing). `python3 -c "from src import in_spine;
+   print(in_spine.skin_names('<upload>.json'))"` lists the names.
+
 2. **Serve and open it in a MANAGED browser** (`browser.open`), never the user's
    Chrome: a background tab's WebGL canvas is discarded by the compositor, the
    screenshot comes back black, and that reads exactly like a broken rig. Serve

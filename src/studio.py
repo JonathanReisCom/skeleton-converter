@@ -43,7 +43,7 @@ import time
 from functools import partial
 from pathlib import Path
 
-from . import (bundle, compare_out, detect, hud_assets, registry,
+from . import (bundle, compare_out, detect, hud_assets, in_spine, registry,
                skelform_viewer_out, viewer_out)
 from . import godot_preview
 from .devserver import NoCacheHandler
@@ -137,7 +137,7 @@ def _write_uploads(job: Path, files: list) -> list:
 
 
 def _copy_spine_pane(job: Path, index: int, rig: Path, uploads: list,
-                     log: list) -> Path:
+                     log: list, skin: str | None = None) -> Path:
     """A pane for a Spine source: the ORIGINAL json, atlas and page.
 
     Nothing is converted — the pane is the file the user brought, so a
@@ -166,7 +166,7 @@ def _copy_spine_pane(job: Path, index: int, rig: Path, uploads: list,
     viewer_out.emit_viewer(
         str(pane / "index.html"), skeleton_json_path=str(target),
         skeleton_url=f"output/{target.name}",
-        atlas_url=f"output/{atlas.name}" if atlas else None)
+        atlas_url=f"output/{atlas.name}" if atlas else None, skin=skin)
     return pane
 
 
@@ -203,11 +203,12 @@ def _godot_pane(job: Path, index: int, rig: Path, name: str, godot_bin,
 
 
 def _proxy_pane(job: Path, index: int, role: str, rig: Path, source: str,
-                name: str, godot_bin, log: list) -> Path:
+                name: str, godot_bin, log: list,
+                skin: str | None = None) -> Path:
     """A pane for a format with no browser runtime: the Spine leg of the rig."""
     pane = job / f"{index}-{role}-{_slug(name)}-{source}-via-{PROXY}"
     bundle.convert(str(rig), source, PROXY, str(pane), name=_slug(name),
-                   godot_bin=godot_bin, step=log.append)
+                   godot_bin=godot_bin, skin=skin, step=log.append)
     return pane
 
 
@@ -228,21 +229,23 @@ def _copy_skelform_pane(job: Path, index: int, rig: Path, name: str) -> Path:
 
 
 def _source_pane(job: Path, rig: Path, fmt: str, uploads: list, name: str,
-                 godot_bin, log: list) -> Path:
+                 godot_bin, log: list, skin: str | None = None) -> Path:
     if fmt == "spine":
-        return _copy_spine_pane(job, 1, rig, uploads, log)
+        return _copy_spine_pane(job, 1, rig, uploads, log, skin=skin)
     if fmt == "skelform":
         return _copy_skelform_pane(job, 1, rig, name)
     if fmt == "godot":
         pane = _godot_pane(job, 1, rig, name, godot_bin, log)
         if pane is not None:
             return pane
-        return _proxy_pane(job, 1, "source", rig, "godot", name, godot_bin, log)
-    return _proxy_pane(job, 1, "source", rig, fmt, name, godot_bin, log)
+        return _proxy_pane(job, 1, "source", rig, "godot", name, godot_bin, log,
+                           skin=skin)
+    return _proxy_pane(job, 1, "source", rig, fmt, name, godot_bin, log, skin=skin)
 
 
 def _target_pane(job: Path, index: int, rig: Path, fmt: str, target: str,
-                 name: str, fps, godot_bin, log: list) -> Path:
+                 name: str, fps, godot_bin, log: list,
+                 skin: str | None = None) -> Path:
     """What the conversion wrote, playable — or its Spine leg, labelled.
 
     A target with a browser shell (everything in ``TARGETS``) plays the file
@@ -253,12 +256,14 @@ def _target_pane(job: Path, index: int, rig: Path, fmt: str, target: str,
     """
     pane = job / f"{index}-target-{target}"
     result = bundle.convert(str(rig), fmt, target, str(pane), name=_slug(name),
-                            fps=fps, godot_bin=godot_bin, step=log.append)
+                            fps=fps, godot_bin=godot_bin, skin=skin,
+                            step=log.append)
     if result.previewable:
         return pane
     log.append(f"note: the {target} target wrote its files but no browser "
                "shell; replaying this side through the Spine leg")
-    return _proxy_pane(job, index, "target", rig, fmt, name, godot_bin, log)
+    return _proxy_pane(job, index, "target", rig, fmt, name, godot_bin, log,
+                       skin=skin)
 
 
 def delete_job(root: Path, payload: dict) -> dict:
@@ -359,9 +364,20 @@ def convert_request(root: Path, payload: dict, godot_bin=None) -> dict:
     name = str(payload.get("name") or "").strip() or rig.stem
     fps = payload.get("fps")
     fps = float(fps) if fps else None
+    skin = str(payload.get("skin") or "").strip() or None
+    skins = in_spine.skin_names(str(rig)) if fmt == "spine" else []
+    if skin and skins and skin not in skins:
+        raise StudioError(f"this rig has no skin named {skin!r} — it has "
+                          f"{', '.join(skins)}")
+    # The chosen skin is RECORDED, not just used: the panes' viewers are
+    # re-rendered on every request (chrome follows the code), and each one has
+    # to open on the variant the conversion was run under.
+    (job / "options.json").write_text(json.dumps({"skin": skin}), encoding="utf-8")
+    log.append(f"skin: {skin}" if skin else
+               f"skin: {skins[0] if skins else 'the rig default'} (the rig's first)")
 
     log.append(f"--- source pane ({fmt}) ---")
-    source = _source_pane(job, rig, fmt, uploads, name, godot_bin, log)
+    source = _source_pane(job, rig, fmt, uploads, name, godot_bin, log, skin=skin)
     panes = [source]
     converted = []
     index = 1
@@ -374,7 +390,7 @@ def convert_request(root: Path, payload: dict, godot_bin=None) -> dict:
         log.append(f"--- {target} pane ---")
         try:
             pane = _target_pane(job, index, rig, fmt, target, name, fps,
-                                godot_bin, log)
+                                godot_bin, log, skin=skin)
         except Exception as error:  # one leg failing is not the job failing
             log.append(f"note: the {target} conversion failed "
                        f"({type(error).__name__}: {error}) — this pane is left out")
@@ -388,7 +404,8 @@ def convert_request(root: Path, payload: dict, godot_bin=None) -> dict:
     # stale copy of it. The job keeps the conversion; the chrome is code.
     return {"job": job.name, "url": f"/{job.name}/compare.html",
             "detected": fmt, "log": log, "source": source.name,
-            "targets": converted, "panes": [pane.name for pane in panes]}
+            "targets": converted, "panes": [pane.name for pane in panes],
+            "skins": skins, "skin": skin}
 
 
 def _render_page(root: Path) -> bytes:
@@ -403,6 +420,22 @@ def _render_page(root: Path) -> bytes:
 
 CONTENT_TYPES = {"hud.css": "text/css; charset=utf-8",
                 "hud.js": "text/javascript; charset=utf-8"}
+
+
+def _recorded_skin(pane: Path) -> str | None:
+    """The skin this job was converted under, read back for its viewers.
+
+    A pane's viewer is re-rendered on every request, so the choice has to
+    outlive the process that made it: the job folder carries it, beside the
+    upload it describes.
+    """
+    options = pane.parent / "options.json"
+    if not options.is_file():
+        return None
+    try:
+        return (json.loads(options.read_text(encoding="utf-8")) or {}).get("skin")
+    except (ValueError, OSError):
+        return None
 
 
 def _render_pane(pane: Path) -> str | None:
@@ -430,7 +463,8 @@ def _render_pane(pane: Path) -> str | None:
     atlas = next((p for p in sorted(output.iterdir()) if ".atlas" in p.name), None)
     return viewer_out.render_viewer(
         skeleton_json_path=str(rig), skeleton_url=f"output/{rig.name}",
-        atlas_url=f"output/{atlas.name}" if atlas else None)
+        atlas_url=f"output/{atlas.name}" if atlas else None,
+        skin=_recorded_skin(pane))
 
 
 def _live_document(root: Path, route: str) -> tuple[bytes, str] | None:

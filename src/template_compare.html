@@ -227,6 +227,16 @@
     <summary id="slotssummary">Slots</summary>
     <div class="rows" id="attachments"></div>
   </details>
+
+  <!-- The rig's SKIN, where it has more than one. Spine flags the bones a skin
+       owns (`"skin": true`) and draws them only while that skin is ACTIVE, so
+       a weapon that lives in its own skin — the hero's `weapon/sword` — is in
+       the file and drawn by no pane until this row picks it. Shown only when a
+       pane reports skins, which today is the Spine one. -->
+  <details class="slots" id="skins-group" open hidden>
+    <summary id="skinssummary">Skin</summary>
+    <div class="rows" id="skins"></div>
+  </details>
 </aside>
 <main class="player"><div id="stage"></div></main>
 
@@ -244,6 +254,8 @@ const stage = document.getElementById("stage");
 const tracksBox = document.getElementById("tracks");
 const attachmentsBox = document.getElementById("attachments");
 const attachmentsGroup = document.getElementById("attachments-group");
+const skinsBox = document.getElementById("skins");
+const skinsGroup = document.getElementById("skins-group");
 const tval = document.getElementById("tval");
 const where = document.getElementById("where");
 const jobtitle = document.getElementById("jobtitle");
@@ -359,8 +371,12 @@ function slotKey(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+// The slots every pane reports, keyed by the loose name — kept at module scope
+// because the skin row drives them too (see `applySkinToSlots`).
+const slots = new Map();
+
 function buildAttachments() {
-  const slots = new Map();
+  slots.clear();
   frames.forEach((f, i) => {
     if (!paneAlive(i)) return;
     let rows = null;
@@ -374,7 +390,9 @@ function buildAttachments() {
         slot = { name: row.name, options: [], panes: [], value: "" };
         slots.set(key, slot);
       }
-      slot.panes.push(row);
+      // The pane index rides along: the skin row drives only the panes that
+      // have no skins of their own (see `applySkinToSlots`).
+      slot.panes.push({ row, pane: i });
       if (!slot.value && row.value) slot.value = row.value;
       (row.options || []).forEach(option => {
         if (!slot.options.some(known => slotKey(known) === slotKey(option))) {
@@ -411,7 +429,7 @@ function buildAttachments() {
       // blanked: an entry missing on one side is a conversion finding, and
       // erasing it would hide it.
       const wanted = slotKey(select.value);
-      slot.panes.forEach(row => {
+      slot.panes.forEach(({ row }) => {
         if (!select.value) { row.onPick(""); return; }
         const own = (row.options || []).find(o => slotKey(o) === wanted);
         if (own) row.onPick(own);
@@ -426,9 +444,114 @@ function buildAttachments() {
   attachmentsGroup.hidden = slots.size === 0;
 }
 
+// The rig's skin, the same way the slots work: the panes report their own
+// lists (only the Spine runtime knows which bones a skin owns), and ONE row
+// drives every pane that has skins. Switching it is what makes a rig whose
+// weapon lives in its own skin show that weapon at all — and it is the same
+// choice the studio and the CLI's `--skin` make at conversion time.
+function buildSkins() {
+  const skins = new Map();
+  frames.forEach((f, i) => {
+    if (!paneAlive(i)) return;
+    let rows = null;
+    try {
+      rows = paneReady[i].__skinRows ? paneReady[i].__skinRows() : null;
+    } catch (e) { return; }
+    (rows || []).forEach(row => {
+      let skin = skins.get(row.name);
+      if (!skin) {
+        skin = { name: row.name, options: [], panes: [], value: "" };
+        skins.set(row.name, skin);
+      }
+      skin.panes.push(row);
+      if (!skin.value && row.value) skin.value = row.value;
+      (row.options || []).forEach(option => {
+        if (!skin.options.includes(option)) skin.options.push(option);
+      });
+    });
+  });
+
+  skinsBox.textContent = "";
+  skins.forEach(skin => {
+    const line = document.createElement("div");
+    line.className = "row";
+    const name = document.createElement("span");
+    name.className = "row-name";
+    name.textContent = skin.name;
+    name.title = skin.name + " — applied to every pane that has one";
+    const select = document.createElement("select");
+    skin.options.forEach(option => {
+      const o = document.createElement("option");
+      o.textContent = option;
+      o.value = option;
+      select.appendChild(o);
+    });
+    select.value = skin.value || "";
+    select.onchange = () => {
+      const picked = select.value;
+      skin.panes.forEach(row => {
+        if ((row.options || []).includes(picked)) row.onPick(picked);
+      });
+      applySkinToSlots();
+    };
+    line.appendChild(name);
+    line.appendChild(select);
+    skinsBox.appendChild(line);
+  });
+  skinsGroup.hidden = skins.size === 0;
+}
+
+// A skin is not only a Spine idea: the other panes hold every attachment the
+// source had, so the same switch is expressible as "this slot draws this
+// entry". The pane that HAS skins answers what its runtime draws — bone
+// activeness included, which is what actually hides a variant's weapon — and
+// the panes WITHOUT skins follow through the per-slot control a slots row
+// already uses. Those panes switch themselves; pushing into them would fight
+// their own runtime (a pushed "(none)" nulls a slot the next `setSkin` cannot
+// restore). A variant that adds an entry no pane carries is left alone,
+// exactly like any other missing attachment.
+let applyingSkin = false;
+
+function applySkinToSlots() {
+  // Re-entrant by construction: every pane's pick pings `__attachmentsChanged`
+  // back, which lands here again — the SkelForm pane died of exactly that.
+  if (applyingSkin) return;
+  let drawn = null;
+  frames.forEach((f, i) => {
+    if (drawn || !paneAlive(i)) return;
+    try {
+      drawn = paneReady[i].__drawnBySlot ? paneReady[i].__drawnBySlot() : null;
+    } catch (e) { drawn = null; }
+  });
+  if (!drawn) return;
+  applyingSkin = true;
+  try {
+    slots.forEach((slot, key) => {
+      const own = Object.keys(drawn).find(name => slotKey(name) === key);
+      const wanted = own ? drawn[own] : "";
+      slot.panes.forEach(({ row, pane }) => {
+        let hasSkins = false;
+        try { hasSkins = !!(paneReady[pane] && paneReady[pane].__skinRows); } catch (e) { hasSkins = true; }
+        if (hasSkins) return;
+        if (!wanted) { row.onPick(""); return; }
+        const match = (row.options || []).find(o => slotKey(o) === slotKey(wanted));
+        if (match) row.onPick(match);
+      });
+    });
+  } finally {
+    applyingSkin = false;
+  }
+}
+
 // A pane that learns its slots late (the Godot wrapper gets them from GDScript
 // once the scene is up) asks the shell to redraw them.
-window.__attachmentsChanged = buildAttachments;
+window.__attachmentsChanged = () => {
+  buildAttachments();
+  buildSkins();
+  // A pane that reported its slots late also has to be brought to the skin
+  // the row shows, or the two sides play different variants.
+  applySkinToSlots();
+};
 
 Promise.all(ready).then((ws) => {
   paneReady = ws;
@@ -454,6 +577,8 @@ Promise.all(ready).then((ws) => {
     }
   }
   buildAttachments();
+  buildSkins();
+  applySkinToSlots();
   if (!names) { tracksBox.textContent = "(waiting for animation names)"; return; }
   tracksBox.textContent = "";
   names.forEach(name => {

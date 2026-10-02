@@ -12,7 +12,7 @@ import math
 import re
 from pathlib import Path
 
-from src import bundle, skelform_viewer_out
+from src import bundle, skelform_viewer_out, viewer_out
 from src.in_godot import read_godot_skeleton
 from src.model import Attachment, Bone, Key, Skeleton
 from src.out_godot import write_godot_scene
@@ -213,6 +213,28 @@ def test_a_viewer_ships_the_shared_hud_beside_it(tmp_path):
     bundle.view(str(rig))
     for name in ("hud.css", "hud.js"):
         assert (tmp_path / name).is_file(), name
+
+
+def test_a_viewer_opens_on_the_rigs_first_skin(tmp_path):
+    """A pane opens EQUIPPED, and the file is the only thing that says which.
+
+    ``skins`` is a list of alternatives and nothing records the active one, so
+    a caller that does not name a skin still has to resolve it. First in FILE
+    ORDER is the rule — not the name ``default`` — so a rig whose first skin is
+    a weapon variant opens with that weapon, and an explicit ``skin`` (the
+    studio's select, the CLI's ``--skin``) still wins.
+    """
+    rig = {"skeleton": {"spine": "4.2.33"}, "bones": [{"name": "root"}],
+           "slots": [], "skins": [{"name": "armed"}, {"name": "default"}],
+           "animations": {}}
+    path = tmp_path / "rig.json"
+    path.write_text(json.dumps(rig), encoding="utf-8")
+
+    html = viewer_out.render_viewer(skeleton_json_path=str(path))
+    assert '|| "armed";' in html
+    explicit = viewer_out.render_viewer(skeleton_json_path=str(path),
+                                        skin="default")
+    assert '|| "default";' in explicit
 
 
 def test_the_skelform_viewer_ships_the_same_hud(tmp_path):

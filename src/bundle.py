@@ -143,7 +143,8 @@ def _skelform_timing(model) -> tuple[float, str | None]:
 def convert(input_path: str, source: str, target: str, out_dir: str,
             name: str | None = None, atlas: str | None = None,
             texture: str | None = None, godot_bin: str | None = None,
-            fps: float | None = None, step: StepFn = print) -> ConvertResult:
+            fps: float | None = None, skin: str | None = None,
+            step: StepFn = print) -> ConvertResult:
     """Convert one rig file to a format bundle in ``out_dir``.
 
     - ``out_dir`` is a DIRECTORY: the output is a bundle, not a single file.
@@ -167,8 +168,14 @@ def convert(input_path: str, source: str, target: str, out_dir: str,
     atlas_path = atlas
     if source == "spine" and not atlas_path:
         atlas_path = _find_atlas(Path(input_path))
-    model = (reader(input_path, atlas_path) if atlas_path
-             else reader(input_path))
+    # `skin` picks the rig's variant where the format has them. Spine marks the
+    # bones a skin owns (`skin: true`) and its runtime draws them only while
+    # that skin is ACTIVE, so a weapon that lives in its own skin is invisible
+    # — and, worse, unbaked — unless the conversion names it. Readers without
+    # skins are called without the argument.
+    extra = {"skin": skin} if (source == "spine" and skin) else {}
+    model = (reader(input_path, atlas_path, **extra) if atlas_path
+             else reader(input_path, **extra))
     result.notes = list(model.notes)   # printed again below, once steps restart
 
     step(f"destination: {out}")

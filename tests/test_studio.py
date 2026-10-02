@@ -71,6 +71,33 @@ def studio_server(tmp_path):
         thread.join(timeout=5)
 
 
+def test_an_unknown_skin_is_refused_with_the_list(tmp_path):
+    """A typo must not convert under a different variant.
+
+    A weapon that lives in its own skin is neither drawn nor animated unless
+    that skin is named, so silently falling back to `default` (or to whatever
+    the first skin is) hands back a rig the user did not ask for — with no
+    sword in it and no sign that anything was wrong.
+    """
+    rig = {
+        "skeleton": {"spine": "4.2.33", "width": 64, "height": 64},
+        "bones": [{"name": "root", "length": 10.0}],
+        "slots": [{"name": "weapon", "bone": "root", "attachment": "sword"}],
+        "skins": [{"name": "default"}, {"name": "weapon/sword"},
+                  {"name": "weapon/morningstar"}],
+        "animations": {},
+    }
+    payload = {
+        "files": [{"name": "rig.json",
+                   "data": base64.b64encode(json.dumps(rig).encode()).decode()}],
+        "skin": "weapon/sord",
+    }
+    root = tmp_path / "jobs"
+    root.mkdir()
+    with pytest.raises(studio.StudioError, match="no skin named"):
+        studio.convert_request(root, payload)
+
+
 def test_page_lists_the_outputs_it_converts_to(tmp_path):
     """One upload builds every output, so the page offers no target to pick."""
     root = tmp_path / "jobs"
